@@ -1,4 +1,28 @@
+# Build output
 dist
+*.tsbuildinfo
+
+# Dependencies
 node_modules
+
+# Test coverage
 .coverage
 coverage
+
+# Editor / IDE
+.vscode
+.idea
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Local secrets — the registry auth token for @syn-con lives here
+.npmrc
+.env
+.env.local
