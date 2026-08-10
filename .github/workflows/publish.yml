@@ -77,6 +77,10 @@ jobs:
         if: steps.check.outputs.publish == 'true'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # `prepublishOnly` runs `n8n-node prerelease`, which blocks a bare `npm publish` unless
+          # RELEASE_MODE is set. `n8n-node release` sets it too, but its release-it flow expects
+          # branch `main` and does its own tagging/changelog, which this workflow already handles.
+          RELEASE_MODE: "true"
         run: npm publish
 
       - name: Tag the release
