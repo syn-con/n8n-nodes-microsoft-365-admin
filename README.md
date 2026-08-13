@@ -27,6 +27,9 @@ for the `@syn-con` scope. In `~/.npmrc`:
 //npm.pkg.github.com/:_authToken=YOUR_GITHUB_TOKEN
 ```
 
+n8n 1.80 or newer is required: the license write operations run as custom operations, which
+older versions do not execute.
+
 Then install it into your n8n instance and restart:
 
 ```bash
@@ -75,6 +78,31 @@ Save to run the connection test.
 credential. Graph replies 403 to a valid token that lacks a permission, and n8n only
 fetches a new token on a 401 — so a token minted before you granted consent keeps failing
 forever. Deleting and re-adding the credential is the fix; editing and saving is not.
+
+**Entra ID applies one license change per tenant at a time.** A second `assignLicense`
+write arriving while the first is still being processed is rejected outright — "Error due
+to concurrent requests being made to the tenant" — and the tenant can stay busy for the
+better part of a minute. Assign, Assign to Group and Unassign therefore behave differently
+from every other operation in this node: they send one request at a time rather than one
+per input item in parallel, and a rejected write is retried with a growing delay instead of
+failing the run. Three things make a bulk change finish quickly:
+
+- **Pick every SKU in one item.** The License SKU field is a multi-select, and one request
+  carries any number of licenses for the same tenant-processing time. Ten licenses on one
+  user is one request, not ten.
+- **Swap in place.** Options → *License SKU Names or IDs to Remove* on Assign removes
+  licenses in the same request that adds the new ones, so an E3 → E5 move costs one round
+  of processing instead of two.
+- **Let items collapse.** Options → *Combine Items for the Same Target* (on by default)
+  merges every input item aimed at the same user into a single request, so a workflow that
+  emits one item per license change still sends one request per user.
+
+For hundreds of users, license through a group instead: **Assign to Group** is a single
+write that Entra fans out to the members itself, in the background.
+
+Options also carries *Max Retries* (default 5) and *Wait Between Requests*, for tenants
+where something outside the workflow — an admin in the portal, another automation — is
+competing for the same lock.
 
 **Set `usageLocation` before licensing a user.** Assigning a license to a user without one
 fails with an error that looks like a permissions problem. Set it first with User → Update

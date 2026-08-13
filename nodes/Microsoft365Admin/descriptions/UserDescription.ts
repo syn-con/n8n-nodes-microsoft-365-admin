@@ -15,6 +15,68 @@ import { ignoreHttpStatusErrorsConfig } from './common';
 import { handleErrorPostReceive, microsoftApiRequest } from '../GenericFunctions';
 import { deepMerge } from '../utils';
 
+/**
+ * Graph refuses these unless they travel in a PATCH of their own, with no other property
+ * alongside them.
+ */
+const SEPARATE_ONLY_PROPERTIES = [
+	'aboutMe',
+	'birthday',
+	'interests',
+	'mySite',
+	'pastProjects',
+	'responsibilities',
+	'schools',
+	'skills',
+];
+
+/** Rewrites the collected fields into the shapes Graph accepts. */
+function toGraphUserBody(fields: IDataObject): IDataObject {
+	const body: IDataObject = { ...fields };
+
+	for (const key of ['birthday', 'employeeHireDate', 'employeeLeaveDateTime']) {
+		if (body[key]) {
+			body[key] = (body[key] as DateTime).toUTC().toISO();
+		}
+	}
+	if (body.businessPhones) {
+		body.businessPhones = [body.businessPhones as string];
+	}
+	if (body.employeeOrgData) {
+		body.employeeOrgData = (body.employeeOrgData as IDataObject).employeeOrgValues;
+	}
+	if (body.passwordPolicies) {
+		body.passwordPolicies = (body.passwordPolicies as string[]).join(',');
+	}
+	// forceChangePasswordNextSignInWithMfa doesn't seem to take effect when providing it in
+	// the initial create request, so it is applied here instead. Only the two known flags are
+	// honoured, so an expression cannot name an arbitrary property of the password profile.
+	if (body.forceChangePassword) {
+		const flag = body.forceChangePassword as string;
+		if (['forceChangePasswordNextSignIn', 'forceChangePasswordNextSignInWithMfa'].includes(flag)) {
+			body.passwordProfile ??= {};
+			(body.passwordProfile as IDataObject)[flag] = true;
+		}
+		delete body.forceChangePassword;
+	}
+
+	return body;
+}
+
+/** Moves the properties Graph only accepts alone out of `body` and into their own object. */
+function splitSeparateOnly(body: IDataObject): IDataObject {
+	const separateBody: IDataObject = {};
+
+	for (const key of SEPARATE_ONLY_PROPERTIES) {
+		if (key in body) {
+			separateBody[key] = body[key];
+			delete body[key];
+		}
+	}
+
+	return separateBody;
+}
+
 export const userOperations: INodeProperties[] = [
 	{
 		displayName: 'Operation',
@@ -934,82 +996,31 @@ const createFields: INodeProperties[] = [
 						for (const item of items) {
 							const userId = item.json.id as string;
 							const fields = this.getNodeParameter('additionalFields', item.index) as IDataObject;
-							if (Object.keys(fields).length) {
-								const body: IDataObject = {
-									...fields,
-								};
-								if (body.birthday) {
-									body.birthday = (body.birthday as DateTime).toUTC().toISO();
-								}
-								if (body.businessPhones) {
-									body.businessPhones = [body.businessPhones as string];
-								}
-								if (body.employeeHireDate) {
-									body.employeeHireDate = (body.employeeHireDate as DateTime).toUTC().toISO();
-								}
-								if (body.employeeLeaveDateTime) {
-									body.employeeLeaveDateTime = (body.employeeLeaveDateTime as DateTime)
-										.toUTC()
-										.toISO();
-								}
-								if (body.employeeOrgData) {
-									body.employeeOrgData = (body.employeeOrgData as IDataObject).employeeOrgValues;
-								}
-								if (body.passwordPolicies) {
-									body.passwordPolicies = (body.passwordPolicies as string[]).join(',');
-								}
-								// forceChangePasswordNextSignInWithMfa doesn't seem to take effect when providing it in the initial create request,
-								// so we add it in the update request
-								if (body.forceChangePassword) {
-									if (body.forceChangePassword === 'forceChangePasswordNextSignIn') {
-										body.passwordProfile ??= {};
-										(body.passwordProfile as IDataObject).forceChangePasswordNextSignIn = true;
-									} else if (body.forceChangePassword === 'forceChangePasswordNextSignInWithMfa') {
-										body.passwordProfile ??= {};
-										(body.passwordProfile as IDataObject).forceChangePasswordNextSignInWithMfa =
-											true;
-									}
-									delete body.forceChangePassword;
-								}
+							if (!Object.keys(fields).length) {
+								continue;
+							}
 
-								// To update the following properties, you must specify them in their own PATCH request, without including the other properties
-								const separateProperties = [
-									'aboutMe',
-									'birthday',
-									'interests',
-									'mySite',
-									'pastProjects',
-									'responsibilities',
-									'schools',
-									'skills',
-								];
-								const separateBody: IDataObject = {};
-								for (const [key, value] of Object.entries(body)) {
-									if (separateProperties.includes(key)) {
-										separateBody[key] = value;
-										delete body[key];
-									}
-								}
+							const body = toGraphUserBody(fields);
+							const separateBody = splitSeparateOnly(body);
 
+							try {
+								if (Object.keys(separateBody).length) {
+									await microsoftApiRequest.call(this, 'PATCH', `/users/${userId}`, separateBody);
+									deepMerge(item.json, separateBody);
+								}
+								if (Object.keys(body).length) {
+									await microsoftApiRequest.call(this, 'PATCH', `/users/${userId}`, body);
+									deepMerge(item.json, body);
+								}
+							} catch (error) {
 								try {
-									if (Object.keys(separateBody).length) {
-										await microsoftApiRequest.call(this, 'PATCH', `/users/${userId}`, separateBody);
-										deepMerge(item.json, separateBody);
-									}
-									if (Object.keys(body).length) {
-										await microsoftApiRequest.call(this, 'PATCH', `/users/${userId}`, body);
-										deepMerge(item.json, body);
-									}
-								} catch (error) {
-									try {
-										await microsoftApiRequest.call(this, 'DELETE', `/users/${userId}`);
-									} catch {}
-									// Keep an already-typed node error as-is; wrap anything else so the
-									// workflow always surfaces a NodeApiError rather than a bare Error.
-									throw error instanceof NodeApiError
-										? error
-										: new NodeApiError(this.getNode(), error as JsonObject);
-								}
+									await microsoftApiRequest.call(this, 'DELETE', `/users/${userId}`);
+								} catch {}
+								// Keep an already-typed node error as-is; wrap anything else so the
+								// workflow always surfaces a NodeApiError rather than a bare Error.
+								throw error instanceof NodeApiError
+									? error
+									: new NodeApiError(this.getNode(), error as JsonObject);
 							}
 						}
 						return items;
@@ -2155,31 +2166,12 @@ const updateFields: INodeProperties[] = [
 						for (const item of items) {
 							const userId = this.getNodeParameter('user.value', item.index) as string;
 							const fields = this.getNodeParameter('updateFields', item.index) as IDataObject;
-							// To update the following properties, you must specify them in their own PATCH request, without including the other properties
-							const separateProperties = [
-								'aboutMe',
-								'birthday',
-								'interests',
-								'mySite',
-								'pastProjects',
-								'responsibilities',
-								'schools',
-								'skills',
-							];
-							const separateFields = Object.keys(fields)
-								.filter((key) => separateProperties.includes(key))
-								.reduce((obj, key) => ({
-										...obj,
-										[key]: fields[key],
-									}), {});
-							if (Object.keys(separateFields).length) {
-								const body: IDataObject = {
-									...separateFields,
-								};
-								if (body.birthday) {
-									body.birthday = (body.birthday as DateTime).toUTC().toISO();
-								}
-								await microsoftApiRequest.call(this, 'PATCH', `/users/${userId}`, body);
+							// The rest of the update travels with the request the routing already built;
+							// only the properties Graph insists on receiving alone are sent here.
+							const separateBody = splitSeparateOnly(toGraphUserBody(fields));
+
+							if (Object.keys(separateBody).length) {
+								await microsoftApiRequest.call(this, 'PATCH', `/users/${userId}`, separateBody);
 							}
 						}
 						return items;

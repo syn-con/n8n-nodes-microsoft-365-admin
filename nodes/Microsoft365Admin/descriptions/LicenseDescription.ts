@@ -18,33 +18,15 @@ export const licenseOperations: INodeProperties[] = [
 			{
 				name: 'Assign',
 				value: 'assign',
-				description: 'Assign a license to a user',
-				routing: {
-					request: {
-						method: 'POST',
-						url: '=/users/{{ $parameter["user"] }}/assignLicense',
-						ignoreHttpStatusErrors: ignoreHttpStatusErrorsConfig,
-					},
-					output: {
-						postReceive: [handleErrorPostReceive],
-					},
-				},
+				description: 'Assign one or more licenses to a user',
+				// No `routing`: the write operations run through `customOperations` in the node
+				// class, which serializes the requests Entra ID refuses to process in parallel.
 				action: 'Assign license to user',
 			},
 			{
 				name: 'Assign to Group',
 				value: 'assignGroup',
-				description: 'Assign a license to a group, licensing every member of it',
-				routing: {
-					request: {
-						method: 'POST',
-						url: '=/groups/{{ $parameter["group"] }}/assignLicense',
-						ignoreHttpStatusErrors: ignoreHttpStatusErrorsConfig,
-					},
-					output: {
-						postReceive: [handleErrorPostReceive],
-					},
-				},
+				description: 'Assign one or more licenses to a group, licensing every member of it',
 				action: 'Assign license to group',
 			},
 			{
@@ -131,17 +113,7 @@ export const licenseOperations: INodeProperties[] = [
 			{
 				name: 'Unassign',
 				value: 'unassign',
-				description: 'Remove a license from a user, freeing the seat',
-				routing: {
-					request: {
-						method: 'POST',
-						url: '=/users/{{ $parameter["user"] }}/assignLicense',
-						ignoreHttpStatusErrors: ignoreHttpStatusErrorsConfig,
-					},
-					output: {
-						postReceive: [handleErrorPostReceive],
-					},
-				},
+				description: 'Remove one or more licenses from a user, freeing the seats',
 				action: 'Unassign license from user',
 			},
 		],
@@ -185,11 +157,14 @@ const assignFields: INodeProperties[] = [
 		type: 'resourceLocator',
 	},
 	{
-		displayName: 'License SKU Name or ID',
+		// A multi-select, because Graph applies every SKU in one `assignLicense` call —
+		// and Entra ID spends the same tenant-wide processing time whether that call
+		// carries one license or ten.
+		displayName: 'License SKU Names or IDs',
 		name: 'skuId',
-		default: '',
+		default: [],
 		description:
-			'The license SKU to assign. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
+			'The licenses to assign. Choose from the list, or specify IDs using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
 		displayOptions: {
 			show: {
 				resource: ['license'],
@@ -197,64 +172,10 @@ const assignFields: INodeProperties[] = [
 			},
 		},
 		required: true,
-		routing: {
-			send: {
-				property: 'addLicenses',
-				type: 'body',
-				// Graph expects an array of license assignments. `disabledPlans` is always
-				// present (empty means "enable every service plan in the SKU").
-				value:
-					'={{ [{ skuId: $value, disabledPlans: ($parameter.options?.disabledPlans || "").split(",").map(plan => plan.trim()).filter(plan => plan.length > 0) }] }}',
-			},
-		},
-		type: 'options',
+		type: 'multiOptions',
 		typeOptions: {
 			loadOptionsMethod: 'getSubscribedSkus',
 		},
-	},
-	{
-		// Graph rejects the request unless `removeLicenses` is present, even when empty.
-		displayName: 'Remove Licenses',
-		name: 'removeLicenses',
-		default: '',
-		displayOptions: {
-			show: {
-				resource: ['license'],
-				operation: ['assign'],
-			},
-		},
-		routing: {
-			send: {
-				property: 'removeLicenses',
-				type: 'body',
-				value: '={{ [] }}',
-			},
-		},
-		type: 'hidden',
-	},
-	{
-		displayName: 'Options',
-		name: 'options',
-		default: {},
-		displayOptions: {
-			show: {
-				resource: ['license'],
-				operation: ['assign'],
-			},
-		},
-		options: [
-			{
-				displayName: 'Disabled Plans',
-				name: 'disabledPlans',
-				default: '',
-				description:
-					'Comma-separated service plan IDs to leave switched off within the assigned SKU. Leave empty to enable every plan.',
-				placeholder: 'e.g. 8c7d2df8-86f0-4902-b2ed-a0458298f3b3',
-				type: 'string',
-			},
-		],
-		placeholder: 'Add option',
-		type: 'collection',
 	},
 ];
 
@@ -331,11 +252,11 @@ const assignGroupFields: INodeProperties[] = [
 		type: 'resourceLocator',
 	},
 	{
-		displayName: 'License SKU Name or ID',
+		displayName: 'License SKU Names or IDs',
 		name: 'skuId',
-		default: '',
+		default: [],
 		description:
-			'The license SKU to assign. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
+			'The licenses to assign. Choose from the list, or specify IDs using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
 		displayOptions: {
 			show: {
 				resource: ['license'],
@@ -343,36 +264,10 @@ const assignGroupFields: INodeProperties[] = [
 			},
 		},
 		required: true,
-		routing: {
-			send: {
-				property: 'addLicenses',
-				type: 'body',
-				value: '={{ [{ skuId: $value, disabledPlans: [] }] }}',
-			},
-		},
-		type: 'options',
+		type: 'multiOptions',
 		typeOptions: {
 			loadOptionsMethod: 'getSubscribedSkus',
 		},
-	},
-	{
-		displayName: 'Remove Licenses',
-		name: 'removeLicenses',
-		default: '',
-		displayOptions: {
-			show: {
-				resource: ['license'],
-				operation: ['assignGroup'],
-			},
-		},
-		routing: {
-			send: {
-				property: 'removeLicenses',
-				type: 'body',
-				value: '={{ [] }}',
-			},
-		},
-		type: 'hidden',
 	},
 ];
 
@@ -542,11 +437,11 @@ const unassignFields: INodeProperties[] = [
 		type: 'resourceLocator',
 	},
 	{
-		displayName: 'License SKU Name or ID',
+		displayName: 'License SKU Names or IDs',
 		name: 'skuId',
-		default: '',
+		default: [],
 		description:
-			'The license SKU to remove. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
+			'The licenses to remove. Choose from the list, or specify IDs using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
 		displayOptions: {
 			show: {
 				resource: ['license'],
@@ -554,37 +449,94 @@ const unassignFields: INodeProperties[] = [
 			},
 		},
 		required: true,
-		routing: {
-			send: {
-				property: 'removeLicenses',
-				type: 'body',
-				value: '={{ [$value] }}',
-			},
-		},
-		type: 'options',
+		type: 'multiOptions',
 		typeOptions: {
 			loadOptionsMethod: 'getSubscribedSkus',
 		},
 	},
+];
+
+/**
+ * Shared by the three write operations, which all post to `assignLicense` and all have to
+ * cope with Entra ID processing one license change per tenant at a time.
+ */
+const writeOptionsFields: INodeProperties[] = [
 	{
-		// Graph requires both keys on every assignLicense call.
-		displayName: 'Add Licenses',
-		name: 'addLicenses',
-		default: '',
+		displayName: 'Options',
+		name: 'options',
+		default: {},
 		displayOptions: {
 			show: {
 				resource: ['license'],
-				operation: ['unassign'],
+				operation: ['assign', 'assignGroup', 'unassign'],
 			},
 		},
-		routing: {
-			send: {
-				property: 'addLicenses',
-				type: 'body',
-				value: '={{ [] }}',
+		options: [
+			{
+				displayName: 'Combine Items for the Same Target',
+				name: 'combineItems',
+				default: true,
+				description:
+					'Whether to merge every input item aimed at the same user or group into one Graph request. A single request can add and remove any number of licenses at no extra cost, so leaving this on is what makes a run over a long list of license changes finish in minutes rather than hours. Turn it off to send one request per item.',
+				type: 'boolean',
 			},
-		},
-		type: 'hidden',
+			{
+				displayName: 'Disabled Plans',
+				name: 'disabledPlans',
+				default: '',
+				description:
+					'Comma-separated service plan IDs to leave switched off. Each plan is applied to whichever selected SKU contains it. Leave empty to enable every plan.',
+				displayOptions: {
+					show: {
+						'/operation': ['assign', 'assignGroup'],
+					},
+				},
+				placeholder: 'e.g. 8c7d2df8-86f0-4902-b2ed-a0458298f3b3',
+				type: 'string',
+			},
+			{
+				displayName: 'License SKU Names or IDs to Remove',
+				name: 'removeSkuIds',
+				default: [],
+				description:
+					'Licenses to remove in the same request that assigns the ones above — a swap costs one round of tenant processing instead of two. Choose from the list, or specify IDs using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
+				displayOptions: {
+					show: {
+						'/operation': ['assign', 'assignGroup'],
+					},
+				},
+				type: 'multiOptions',
+				typeOptions: {
+					loadOptionsMethod: 'getSubscribedSkus',
+				},
+			},
+			{
+				displayName: 'Max Retries',
+				name: 'maxRetries',
+				default: 5,
+				description:
+					'How many times to retry a write that Entra rejected because the tenant was busy with another license change. Each retry waits longer than the last, up to a minute.',
+				type: 'number',
+				typeOptions: {
+					minValue: 0,
+				},
+				validateType: 'number',
+			},
+			{
+				displayName: 'Wait Between Requests',
+				name: 'waitBetweenRequests',
+				default: 0,
+				description:
+					'Milliseconds to pause between requests. Only useful when something outside this workflow is also changing licenses in the tenant and the retries are not keeping up.',
+				type: 'number',
+				typeOptions: {
+					minValue: 0,
+				},
+				validateType: 'number',
+			},
+		],
+		placeholder: 'Add option',
+		type: 'collection',
 	},
 ];
 
@@ -594,4 +546,5 @@ export const licenseFields: INodeProperties[] = [
 	...queryHoldersFields,
 	...queryUserFields,
 	...unassignFields,
+	...writeOptionsFields,
 ];

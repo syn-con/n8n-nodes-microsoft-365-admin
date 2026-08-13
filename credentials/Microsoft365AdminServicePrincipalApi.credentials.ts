@@ -176,7 +176,11 @@ export class Microsoft365AdminServicePrincipalApi implements ICredentialType {
 
 	documentationUrl = 'https://learn.microsoft.com/en-us/graph/auth-v2-service';
 
-	icon: Icon = 'file:icons/microsoft365Admin.svg';
+	// The dark variant differs only in the lightness of the four fills.
+	icon: Icon = {
+		light: 'file:icons/microsoft365Admin.svg',
+		dark: 'file:icons/microsoft365Admin.dark.svg',
+	};
 
 	properties: INodeProperties[] = [
 		{

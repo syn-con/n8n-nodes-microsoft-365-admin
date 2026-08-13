@@ -135,7 +135,7 @@ describe('microsoftApiRequest', () => {
 	it('honours an explicit absolute URL over the constructed one', async () => {
 		const context = mockContext();
 		const absolute = 'https://graph.microsoft.com/v1.0/users?$skiptoken=abc';
-		await microsoftApiRequest.call(context, 'GET', '/users', {}, undefined, undefined, absolute);
+		await microsoftApiRequest.call(context, 'GET', '/users', {}, { url: absolute });
 
 		const [, options] = vi.mocked(context.helpers.httpRequestWithAuthentication).mock.calls[0];
 		expect(options.url).toBe(absolute);
@@ -148,8 +148,7 @@ describe('microsoftApiRequest', () => {
 			'POST',
 			'/users',
 			{ displayName: 'Ada' },
-			{ $top: 10 },
-			{ ConsistencyLevel: 'eventual' },
+			{ qs: { $top: 10 }, headers: { ConsistencyLevel: 'eventual' } },
 		);
 
 		const [, options] = vi.mocked(context.helpers.httpRequestWithAuthentication).mock.calls[0];
@@ -380,6 +379,35 @@ describe('resource locator searches', () => {
 		const [, options] = vi.mocked(context.helpers.httpRequestWithAuthentication).mock.calls[0];
 		expect(options.qs?.$filter).toContain("startsWith(displayName, 'ada')");
 		expect(options.qs?.$filter).toContain("startsWith(userPrincipalName, 'ada')");
+	});
+
+	it('doubles an apostrophe so a name like O’Brien does not break the filter', async () => {
+		const context = listContext([]);
+		await getUsers.call(context, "o'brien");
+
+		const [, options] = vi.mocked(context.helpers.httpRequestWithAuthentication).mock.calls[0];
+		expect(options.qs?.$filter).toBe(
+			"startsWith(displayName, 'o''brien') OR startsWith(userPrincipalName, 'o''brien')",
+		);
+	});
+
+	it('escapes a quote in a group search phrase', async () => {
+		const context = listContext([]);
+		await getGroups.call(context, 'say "hi"');
+
+		const [, options] = vi.mocked(context.helpers.httpRequestWithAuthentication).mock.calls[0];
+		expect(options.qs?.$search).toBe('"displayName:say \\"hi\\""');
+	});
+
+	it.each([
+		['groups', getGroups],
+		['users', getUsers],
+	])('falls back to the ID when %s have no display name', async (label, search) => {
+		const context = listContext([{ id: 'no-name' }] as Array<{ id: string; displayName: string }>);
+
+		const { results } = await search.call(context);
+
+		expect(results, label).toEqual([{ name: 'no-name', value: 'no-name' }]);
 	});
 
 	it.each([

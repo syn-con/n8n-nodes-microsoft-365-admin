@@ -21,30 +21,57 @@ import {
 
 import { extractEntityProperties, type DirectoryListResponse } from './utils';
 
+/**
+ * Resolves the Graph host from the credential, tolerating a stored trailing slash.
+ *
+ * The declarative operations get this from `requestDefaults.baseURL`; anything that
+ * builds its own request needs the same value.
+ */
+export async function getGraphApiBaseUrl(
+	this: IExecuteFunctions | IExecuteSingleFunctions | ILoadOptionsFunctions,
+): Promise<string> {
+	const credentials = await this.getCredentials('microsoft365AdminServicePrincipalApi');
+	return (
+		typeof credentials.graphApiBaseUrl === 'string' && credentials.graphApiBaseUrl !== ''
+			? credentials.graphApiBaseUrl
+			: 'https://graph.microsoft.com'
+	).replace(/\/+$/, '');
+}
+
+/**
+ * The parts of a Graph request that most call sites leave alone, kept out of the parameter
+ * list so the common `(method, endpoint)` and `(method, endpoint, body)` calls stay short.
+ */
+export interface GraphRequestExtras {
+	qs?: IDataObject;
+	headers?: IDataObject;
+	/** An absolute URL, e.g. an `@odata.nextLink`, used instead of building one. */
+	url?: string;
+	/** Returns `{ body, headers, statusCode }` instead of just the body. */
+	returnFullResponse?: boolean;
+	/** Set to inspect an error response yourself rather than having it thrown. */
+	ignoreHttpStatusErrors?: IHttpRequestOptions['ignoreHttpStatusErrors'];
+}
+
 export async function microsoftApiRequest(
 	this: IExecuteFunctions | IExecuteSingleFunctions | ILoadOptionsFunctions,
 	method: IHttpRequestMethods,
 	endpoint: string,
 	body: IDataObject = {},
-	qs?: IDataObject,
-	headers?: IDataObject,
-	url?: string,
+	extras: GraphRequestExtras = {},
 ): Promise<unknown> {
-	const credentials = await this.getCredentials('microsoft365AdminServicePrincipalApi');
-	const baseUrl = (
-		typeof credentials.graphApiBaseUrl === 'string' && credentials.graphApiBaseUrl !== ''
-			? credentials.graphApiBaseUrl
-			: 'https://graph.microsoft.com'
-	).replace(/\/+$/, '');
+	const baseUrl = await getGraphApiBaseUrl.call(this);
 	const options: IHttpRequestOptions = {
 		method,
-		url: url ?? `${baseUrl}/v1.0${endpoint}`,
+		url: extras.url ?? `${baseUrl}/v1.0${endpoint}`,
 		// The `$metadata` endpoints answer with XML, which the property loaders parse
 		// themselves. Leaving JSON parsing on for those would hand them an unusable value.
 		json: !endpoint.startsWith('/$metadata'),
-		headers,
+		headers: extras.headers,
 		body,
-		qs,
+		qs: extras.qs,
+		returnFullResponse: extras.returnFullResponse,
+		ignoreHttpStatusErrors: extras.ignoreHttpStatusErrors,
 	};
 
 	return this.helpers.httpRequestWithAuthentication.call(
@@ -59,33 +86,25 @@ export async function microsoftApiPaginateRequest(
 	method: IHttpRequestMethods,
 	endpoint: string,
 	body: IDataObject = {},
-	qs?: IDataObject,
-	headers?: IDataObject,
-	url?: string,
-	itemIndex: number = 0,
+	extras: Pick<GraphRequestExtras, 'qs' | 'headers' | 'url'> & { itemIndex?: number } = {},
 ): Promise<IDataObject[]> {
-	const credentials = await this.getCredentials('microsoft365AdminServicePrincipalApi');
-	const baseUrl = (
-		typeof credentials.graphApiBaseUrl === 'string' && credentials.graphApiBaseUrl !== ''
-			? credentials.graphApiBaseUrl
-			: 'https://graph.microsoft.com'
-	).replace(/\/+$/, '');
+	const baseUrl = await getGraphApiBaseUrl.call(this);
 	// `IHttpRequestOptions` has no `uri` property, which `requestWithAuthenticationPaginated`
 	// requires — so the deprecated option type is the only one that fits here.
 	// eslint-disable-next-line @n8n/community-nodes/no-deprecated-workflow-functions
 	const options: IRequestOptions = {
 		method,
-		uri: url ?? `${baseUrl}/v1.0${endpoint}`,
+		uri: extras.url ?? `${baseUrl}/v1.0${endpoint}`,
 		json: true,
-		headers,
+		headers: extras.headers,
 		body,
-		qs,
+		qs: extras.qs,
 	};
 
 	const pages = await this.helpers.requestWithAuthenticationPaginated.call(
 		this,
 		options,
-		itemIndex,
+		extras.itemIndex ?? 0,
 		{
 			continue: '={{ !!$response.body?.["@odata.nextLink"] }}',
 			request: {
@@ -107,162 +126,165 @@ export async function microsoftApiPaginateRequest(
 	return results;
 }
 
+/** The ID format quoted back whenever an identifier is unusable. */
+const ID_FORMAT = 'The ID should be in the format e.g. 02bd9fd6-8f93-4758-87c3-1fb73740a315';
+
+/** n8n strips an empty body object, so a no-op update reaches Graph with no payload. */
+const EMPTY_PAYLOAD = 'Empty Payload. JSON content expected.';
+
+/** A message to raise in place of Graph's, or `ignore` to let the response through. */
+type ErrorResolution = { message: string; description: string } | 'ignore';
+
+interface ErrorRule {
+	/** The Graph error code this rule answers. */
+	code: string;
+	/** Narrows a code that Graph uses for more than one thing. */
+	when?: (message: string) => boolean;
+	resolve:
+		| ErrorResolution
+		| ((this: IExecuteSingleFunctions, message: string, resource: string) => ErrorResolution);
+}
+
+/** The only thing that varies between the not-found messages is the parameter to blame. */
+function notFound(resource: 'group' | 'user', parameterName: string): ErrorResolution {
+	return {
+		message: `The required ${resource} doesn't match any existing one`,
+		description: `Double-check the value in the parameter '${parameterName}' and try again`,
+	};
+}
+
+/** Keyed by `resource.operation`; the first matching rule wins. */
+const OPERATION_RULES: Record<string, ErrorRule[]> = {
+	'group.delete': [
+		{ code: 'Request_ResourceNotFound', resolve: notFound('group', 'Group to Delete') },
+	],
+	'group.get': [{ code: 'Request_ResourceNotFound', resolve: notFound('group', 'Group to Get') }],
+	'group.update': [
+		{ code: 'BadRequest', when: (message) => message === EMPTY_PAYLOAD, resolve: 'ignore' },
+		{ code: 'Request_ResourceNotFound', resolve: notFound('group', 'Group to Update') },
+	],
+	'user.addGroup': [
+		{
+			code: 'Request_BadRequest',
+			when: (message) =>
+				message ===
+				"One or more added object references already exist for the following modified properties: 'members'.",
+			resolve: {
+				message: 'The user is already in the group',
+				description:
+					'The specified user cannot be added to the group because they are already a member',
+			},
+		},
+		{
+			code: 'Request_ResourceNotFound',
+			// Graph names whichever object it could not find, so the message decides the blame.
+			resolve(message) {
+				const group = this.getNodeParameter('group.value') as string;
+				return message.includes(group)
+					? notFound('group', 'Group')
+					: notFound('user', 'User to Add');
+			},
+		},
+	],
+	'user.delete': [
+		{ code: 'Request_ResourceNotFound', resolve: notFound('user', 'User to Delete') },
+	],
+	'user.get': [{ code: 'Request_ResourceNotFound', resolve: notFound('user', 'User to Get') }],
+	'user.removeGroup': [
+		{
+			code: 'Request_ResourceNotFound',
+			resolve: {
+				message: 'The user is not in the group',
+				description:
+					'The specified user cannot be removed from the group because they are not a member of the group',
+			},
+		},
+		{
+			code: 'Request_UnsupportedQuery',
+			when: (message) =>
+				message === "Unsupported referenced-object resource identifier for link property 'members'.",
+			resolve: { message: 'The user ID is invalid', description: ID_FORMAT },
+		},
+	],
+	'user.update': [
+		{ code: 'BadRequest', when: (message) => message === EMPTY_PAYLOAD, resolve: 'ignore' },
+		{ code: 'Request_ResourceNotFound', resolve: notFound('user', 'User to Update') },
+	],
+};
+
+/** Tried after the operation's own rules, for failures any operation can hit. */
+const GENERIC_RULES: ErrorRule[] = [
+	{
+		code: 'Request_BadRequest',
+		when: (message) => message.startsWith('Invalid object identifier'),
+		resolve(message, resource) {
+			const group = this.getNodeParameter('group.value', '') as string;
+			const parameterResource =
+				resource === 'group' || message.includes(group) ? 'group' : 'user';
+
+			return { message: `The ${parameterResource} ID is invalid`, description: ID_FORMAT };
+		},
+	},
+];
+
+/** Reads Graph's error envelope, which is absent on some gateway failures. */
+export function graphError(body: unknown): {
+	code: string;
+	message: string;
+	details?: Array<{ code: string; message: string }>;
+} {
+	const error = (body as { error?: { code?: string; message?: string; details?: [] } })?.error;
+
+	return { code: error?.code ?? '', message: error?.message ?? '', details: error?.details };
+}
+
+/** The operation's own rules are tried before the generic ones; the first match wins. */
+function findRule(
+	resource: string,
+	operation: string,
+	code: string,
+	message: string,
+): ErrorRule | undefined {
+	const rules = [...(OPERATION_RULES[`${resource}.${operation}`] ?? []), ...GENERIC_RULES];
+
+	return rules.find((rule) => rule.code === code && (!rule.when || rule.when(message)));
+}
+
 export async function handleErrorPostReceive(
 	this: IExecuteSingleFunctions,
 	data: INodeExecutionData[],
 	response: IN8nHttpFullResponse,
 ): Promise<INodeExecutionData[]> {
-	if (String(response.statusCode).startsWith('4') || String(response.statusCode).startsWith('5')) {
-		const resource = this.getNodeParameter('resource') as string;
-		const operation = this.getNodeParameter('operation') as string;
-		const {
-			code: errorCode,
-			message: errorMessage,
-			details: errorDetails,
-		} = (response.body as IDataObject)?.error as {
-			code: string;
-			message: string;
-			innerError?: {
-				code: string;
-				'request-id'?: string;
-				date?: string;
-			};
-			details?: Array<{
-				code: string;
-				message: string;
-			}>;
-		};
-
-		// Operation specific errors
-		if (resource === 'group') {
-			if (operation === 'delete') {
-				if (errorCode === 'Request_ResourceNotFound') {
-					throw new NodeApiError(this.getNode(), response as unknown as JsonObject, {
-						message: "The required group doesn't match any existing one",
-						description: "Double-check the value in the parameter 'Group to Delete' and try again",
-					});
-				}
-			} else if (operation === 'get') {
-				if (errorCode === 'Request_ResourceNotFound') {
-					throw new NodeApiError(this.getNode(), response as unknown as JsonObject, {
-						message: "The required group doesn't match any existing one",
-						description: "Double-check the value in the parameter 'Group to Get' and try again",
-					});
-				}
-			} else if (operation === 'update') {
-				if (
-					errorCode === 'BadRequest' &&
-					errorMessage === 'Empty Payload. JSON content expected.'
-				) {
-					// Ignore empty payload error. Currently n8n deletes the empty body object from the request.
-					return data;
-				}
-				if (errorCode === 'Request_ResourceNotFound') {
-					throw new NodeApiError(this.getNode(), response as unknown as JsonObject, {
-						message: "The required group doesn't match any existing one",
-						description: "Double-check the value in the parameter 'Group to Update' and try again",
-					});
-				}
-			}
-		} else if (resource === 'user') {
-			if (operation === 'addGroup') {
-				if (
-					errorCode === 'Request_BadRequest' &&
-					errorMessage ===
-						"One or more added object references already exist for the following modified properties: 'members'."
-				) {
-					throw new NodeApiError(this.getNode(), response as unknown as JsonObject, {
-						message: 'The user is already in the group',
-						description:
-							'The specified user cannot be added to the group because they are already a member',
-					});
-				} else if (errorCode === 'Request_ResourceNotFound') {
-					const group = this.getNodeParameter('group.value') as string;
-					if (errorMessage.includes(group)) {
-						throw new NodeApiError(this.getNode(), response as unknown as JsonObject, {
-							message: "The required group doesn't match any existing one",
-							description: "Double-check the value in the parameter 'Group' and try again",
-						});
-					} else {
-						throw new NodeApiError(this.getNode(), response as unknown as JsonObject, {
-							message: "The required user doesn't match any existing one",
-							description: "Double-check the value in the parameter 'User to Add' and try again",
-						});
-					}
-				}
-			} else if (operation === 'delete') {
-				if (errorCode === 'Request_ResourceNotFound') {
-					throw new NodeApiError(this.getNode(), response as unknown as JsonObject, {
-						message: "The required user doesn't match any existing one",
-						description: "Double-check the value in the parameter 'User to Delete' and try again",
-					});
-				}
-			} else if (operation === 'get') {
-				if (errorCode === 'Request_ResourceNotFound') {
-					throw new NodeApiError(this.getNode(), response as unknown as JsonObject, {
-						message: "The required user doesn't match any existing one",
-						description: "Double-check the value in the parameter 'User to Get' and try again",
-					});
-				}
-			} else if (operation === 'removeGroup') {
-				if (errorCode === 'Request_ResourceNotFound') {
-					throw new NodeApiError(this.getNode(), response as unknown as JsonObject, {
-						message: 'The user is not in the group',
-						description:
-							'The specified user cannot be removed from the group because they are not a member of the group',
-					});
-				} else if (
-					errorCode === 'Request_UnsupportedQuery' &&
-					errorMessage ===
-						"Unsupported referenced-object resource identifier for link property 'members'."
-				) {
-					throw new NodeApiError(this.getNode(), response as unknown as JsonObject, {
-						message: 'The user ID is invalid',
-						description: 'The ID should be in the format e.g. 02bd9fd6-8f93-4758-87c3-1fb73740a315',
-					});
-				}
-			} else if (operation === 'update') {
-				if (
-					errorCode === 'BadRequest' &&
-					errorMessage === 'Empty Payload. JSON content expected.'
-				) {
-					// Ignore empty payload error. Currently n8n deletes the empty body object from the request.
-					return data;
-				}
-				if (errorCode === 'Request_ResourceNotFound') {
-					throw new NodeApiError(this.getNode(), response as unknown as JsonObject, {
-						message: "The required user doesn't match any existing one",
-						description: "Double-check the value in the parameter 'User to Update' and try again",
-					});
-				}
-			}
-		}
-
-		// Generic errors
-		if (
-			errorCode === 'Request_BadRequest' &&
-			errorMessage.startsWith('Invalid object identifier')
-		) {
-			const group = this.getNodeParameter('group.value', '') as string;
-			const parameterResource =
-				resource === 'group' || errorMessage.includes(group) ? 'group' : 'user';
-
-			throw new NodeApiError(this.getNode(), response as unknown as JsonObject, {
-				message: `The ${parameterResource} ID is invalid`,
-				description: 'The ID should be in the format e.g. 02bd9fd6-8f93-4758-87c3-1fb73740a315',
-			});
-		}
-		if (errorDetails?.some((x) => x.code === 'ObjectConflict' || x.code === 'ConflictingObjects')) {
-			throw new NodeApiError(this.getNode(), response as unknown as JsonObject, {
-				message: `The ${resource} already exists`,
-				description: errorMessage,
-			});
-		}
-
-		throw new NodeApiError(this.getNode(), response as unknown as JsonObject);
+	const statusCode = String(response.statusCode);
+	if (!statusCode.startsWith('4') && !statusCode.startsWith('5')) {
+		return data;
 	}
 
-	return data;
+	const resource = this.getNodeParameter('resource') as string;
+	const operation = this.getNodeParameter('operation') as string;
+	const { code, message, details } = graphError(response.body);
+	const rule = findRule(resource, operation, code, message);
+
+	if (rule) {
+		const resolution =
+			typeof rule.resolve === 'function' ? rule.resolve.call(this, message, resource) : rule.resolve;
+
+		// The empty-payload case is n8n's doing, not the user's, so the items pass through.
+		if (resolution !== 'ignore') {
+			throw new NodeApiError(this.getNode(), response as unknown as JsonObject, resolution);
+		}
+
+		return data;
+	}
+
+	if (details?.some((detail) => ['ObjectConflict', 'ConflictingObjects'].includes(detail.code))) {
+		throw new NodeApiError(this.getNode(), response as unknown as JsonObject, {
+			message: `The ${resource} already exists`,
+			description: message,
+		});
+	}
+
+	throw new NodeApiError(this.getNode(), response as unknown as JsonObject);
 }
 
 export async function getGroupProperties(
@@ -352,6 +374,25 @@ export async function getUserProperties(
 	return returnData;
 }
 
+/**
+ * Escapes a search term for an OData string literal, where a quote is written twice.
+ *
+ * Without this, searching for a name that contains an apostrophe — O'Brien — closes the
+ * literal early and Graph rejects the whole query.
+ */
+function odataLiteral(value: string): string {
+	return value.replace(/'/g, "''");
+}
+
+/**
+ * Escapes a search term for a `$search` phrase, which is KQL inside double quotes.
+ *
+ * The backslash goes first, so an escape added here is not itself escaped again.
+ */
+function searchPhrase(value: string): string {
+	return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
 export async function getGroups(
 	this: ILoadOptionsFunctions,
 	filter?: string,
@@ -359,15 +400,9 @@ export async function getGroups(
 ): Promise<INodeListSearchResult> {
 	let response: DirectoryListResponse;
 	if (paginationToken) {
-		response = (await microsoftApiRequest.call(
-			this,
-			'GET',
-			'/groups',
-			{},
-			undefined,
-			undefined,
-			paginationToken,
-		)) as DirectoryListResponse;
+		response = (await microsoftApiRequest.call(this, 'GET', '/groups', {}, {
+			url: paginationToken,
+		})) as DirectoryListResponse;
 	} else {
 		const qs: IDataObject = {
 			$select: 'id,displayName',
@@ -375,15 +410,14 @@ export async function getGroups(
 		const headers: IDataObject = {};
 		if (filter) {
 			headers.ConsistencyLevel = 'eventual';
-			qs.$search = `"displayName:${filter}"`;
+			qs.$search = `"displayName:${searchPhrase(filter)}"`;
 		}
 		response = (await microsoftApiRequest.call(
 			this,
 			'GET',
 			'/groups',
 			{},
-			qs,
-			headers,
+			{ qs, headers },
 		)) as DirectoryListResponse;
 	}
 
@@ -394,7 +428,8 @@ export async function getGroups(
 
 	const results: INodeListSearchItems[] = groups
 		.map((g) => ({
-			name: g.displayName,
+			// Sorting compares names, so a directory object without one must not be null.
+			name: g.displayName ?? g.id,
 			value: g.id,
 		}))
 		.sort((a, b) =>
@@ -411,30 +446,24 @@ export async function getUsers(
 ): Promise<INodeListSearchResult> {
 	let response: DirectoryListResponse;
 	if (paginationToken) {
-		response = (await microsoftApiRequest.call(
-			this,
-			'GET',
-			'/users',
-			{},
-			undefined,
-			undefined,
-			paginationToken,
-		)) as DirectoryListResponse;
+		response = (await microsoftApiRequest.call(this, 'GET', '/users', {}, {
+			url: paginationToken,
+		})) as DirectoryListResponse;
 	} else {
 		const qs: IDataObject = {
 			$select: 'id,displayName',
 		};
 		const headers: IDataObject = {};
 		if (filter) {
-			qs.$filter = `startsWith(displayName, '${filter}') OR startsWith(userPrincipalName, '${filter}')`;
+			const term = odataLiteral(filter);
+			qs.$filter = `startsWith(displayName, '${term}') OR startsWith(userPrincipalName, '${term}')`;
 		}
 		response = (await microsoftApiRequest.call(
 			this,
 			'GET',
 			'/users',
 			{},
-			qs,
-			headers,
+			{ qs, headers },
 		)) as DirectoryListResponse;
 	}
 
@@ -445,7 +474,7 @@ export async function getUsers(
 
 	const results: INodeListSearchItems[] = users
 		.map((u) => ({
-			name: u.displayName,
+			name: u.displayName ?? u.id,
 			value: u.id,
 		}))
 		.sort((a, b) =>

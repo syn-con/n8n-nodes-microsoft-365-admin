@@ -1,6 +1,8 @@
 import {
 	NodeConnectionTypes,
+	type IExecuteFunctions,
 	type ILoadOptionsFunctions,
+	type INodeExecutionData,
 	type INodePropertyOptions,
 	type INodeType,
 	type INodeTypeDescription,
@@ -21,14 +23,15 @@ import {
 	getUserProperties,
 	getUsers,
 } from './GenericFunctions';
+import { executeLicenseWrite } from './LicenseFunctions';
 
 export class Microsoft365Admin implements INodeType {
 	description: INodeTypeDescription = {
 		displayName: 'Microsoft 365 Admin',
 		name: 'microsoft365Admin',
-		// Single asset: the four-square mark has no background fill, so it reads
-		// correctly on both the light and dark canvas.
-		icon: 'file:microsoft365Admin.svg',
+		// The mark carries no background fill; the dark variant only lifts each fill's
+		// lightness so it holds the same contrast against a dark canvas.
+		icon: { light: 'file:microsoft365Admin.svg', dark: 'file:microsoft365Admin.dark.svg' },
 		group: ['transform'],
 		version: 1,
 		subtitle: '={{$parameter["operation"] + ": " + $parameter["resource"]}}',
@@ -82,6 +85,27 @@ export class Microsoft365Admin implements INodeType {
 			...userOperations,
 			...userFields,
 		],
+	};
+
+	/**
+	 * The license writes are the one part of this node that cannot be declarative: Entra ID
+	 * applies one license change per tenant at a time and rejects the rest, while
+	 * declarative routing fires every input item's request at once. See LicenseFunctions.ts.
+	 */
+	customOperations = {
+		license: {
+			async assign(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
+				return executeLicenseWrite.call(this, 'assign');
+			},
+
+			async assignGroup(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
+				return executeLicenseWrite.call(this, 'assignGroup');
+			},
+
+			async unassign(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
+				return executeLicenseWrite.call(this, 'unassign');
+			},
+		},
 	};
 
 	methods = {

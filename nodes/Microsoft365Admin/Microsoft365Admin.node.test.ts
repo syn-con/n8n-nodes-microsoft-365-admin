@@ -1,6 +1,9 @@
-import type { INodeProperties, INodePropertyOptions } from 'n8n-workflow';
+import type { IExecuteFunctions, INodeProperties, INodePropertyOptions } from 'n8n-workflow';
 import { describe, expect, it, vi } from 'vitest';
 
+vi.mock('./LicenseFunctions', () => ({ executeLicenseWrite: vi.fn(async () => [[]]) }));
+
+import { executeLicenseWrite } from './LicenseFunctions';
 import { Microsoft365Admin } from './Microsoft365Admin.node';
 
 const node = new Microsoft365Admin();
@@ -72,11 +75,19 @@ describe('operations', () => {
 		expect(operationsFor(resource).map((o) => o.value)).toEqual(expected);
 	});
 
-	it('gives every operation a routing request and an action label', () => {
+	it('gives every operation an action label and a way to execute', () => {
+		const custom = node.customOperations as Record<string, Record<string, unknown>>;
+
 		for (const resource of ['user', 'group', 'license']) {
 			for (const operation of operationsFor(resource)) {
-				expect(operation.routing?.request, `${resource}.${operation.value}`).toBeDefined();
-				expect(operation.action, `${resource}.${operation.value}`).toBeTruthy();
+				const label = `${resource}.${operation.value}`;
+				// Either declarative routing or a custom handler — never both, since a custom
+				// handler silently wins and would leave the routing as a decoy.
+				const routed = operation.routing?.request !== undefined;
+				const handled = custom[resource]?.[operation.value as string] !== undefined;
+
+				expect(routed !== handled, label).toBe(true);
+				expect(operation.action, label).toBeTruthy();
 			}
 		}
 	});
@@ -103,21 +114,6 @@ describe('license routing', () => {
 		expect(routingFor('queryUser')?.url).toContain('/licenseDetails');
 	});
 
-	it('assigns via POST to assignLicense on the user', () => {
-		expect(routingFor('assign')).toMatchObject({ method: 'POST' });
-		expect(routingFor('assign')?.url).toContain('/users/');
-		expect(routingFor('assign')?.url).toContain('/assignLicense');
-	});
-
-	it('assigns to a group via the group assignLicense endpoint', () => {
-		expect(routingFor('assignGroup')?.url).toContain('/groups/');
-		expect(routingFor('assignGroup')?.url).toContain('/assignLicense');
-	});
-
-	it('unassigns through the same assignLicense endpoint', () => {
-		expect(routingFor('unassign')?.url).toContain('/assignLicense');
-	});
-
 	it('sends the eventual-consistency header and $count required for the holders filter', () => {
 		const request = routingFor('queryHolders');
 		expect(request?.headers).toMatchObject({ ConsistencyLevel: 'eventual' });
@@ -129,25 +125,55 @@ describe('license routing', () => {
 	});
 });
 
-describe('license request bodies', () => {
+describe('license writes', () => {
+	// The bodies these operations send are built in LicenseFunctions.ts, so what matters
+	// here is only that the node hands the operations over to it.
+	it.each(['assign', 'assignGroup', 'unassign'] as const)(
+		'routes %s through a custom operation',
+		async (op) => {
+			expect(operationsFor('license').find((o) => o.value === op)?.routing).toBeUndefined();
+
+			const context = { getInputData: () => [] } as unknown as IExecuteFunctions;
+			await node.customOperations.license[op].call(context);
+
+			expect(executeLicenseWrite).toHaveBeenCalledWith(op);
+			expect(vi.mocked(executeLicenseWrite).mock.contexts.at(-1)).toBe(context);
+		},
+	);
+
+	it('lets every write pick more than one SKU at a time', () => {
+		for (const operation of ['assign', 'assignGroup', 'unassign']) {
+			const sku = fieldsFor('license', operation).find((p) => p.name === 'skuId');
+			expect(sku?.type, operation).toBe('multiOptions');
+		}
+	});
+
+	it('offers the same batching and retry options to all three writes', () => {
+		for (const operation of ['assign', 'assignGroup', 'unassign']) {
+			const options = fieldsFor('license', operation).find((p) => p.name === 'options');
+			const names = (options?.options ?? []).map((o) => (o as INodeProperties).name);
+
+			expect(names, operation).toEqual(
+				expect.arrayContaining(['combineItems', 'maxRetries', 'waitBetweenRequests']),
+			);
+		}
+	});
+
+	it('combines items for the same target unless told otherwise', () => {
+		const options = fieldsFor('license', 'assign').find((p) => p.name === 'options');
+		const combine = (options?.options ?? []).find(
+			(o) => (o as INodeProperties).name === 'combineItems',
+		) as INodeProperties;
+
+		expect(combine.default).toBe(true);
+	});
+});
+
+describe('license query bodies', () => {
 	function sendValue(operation: string, field: string): string {
 		const property = fieldsFor('license', operation).find((p) => p.name === field);
 		return property?.routing?.send?.value as string;
 	}
-
-	it('assign builds an addLicenses array from the chosen SKU', () => {
-		expect(sendValue('assign', 'skuId')).toContain('skuId: $value');
-		expect(sendValue('assign', 'skuId')).toContain('disabledPlans');
-	});
-
-	it('assign always sends an empty removeLicenses, which Graph requires', () => {
-		expect(sendValue('assign', 'removeLicenses')).toBe('={{ [] }}');
-	});
-
-	it('unassign sends the SKU under removeLicenses and an empty addLicenses', () => {
-		expect(sendValue('unassign', 'skuId')).toBe('={{ [$value] }}');
-		expect(sendValue('unassign', 'addLicenses')).toBe('={{ [] }}');
-	});
 
 	it('holders filters on assignedLicenses with an unquoted GUID', () => {
 		const filter = sendValue('queryHolders', 'skuId');
@@ -195,7 +221,8 @@ describe('expression capability', () => {
 		expect(idLoaders.length).toBeGreaterThan(0);
 
 		for (const loader of idLoaders) {
-			expect(loader.displayName, loader.name).toMatch(/Name or ID$/);
+			// Plural for the multi-selects on the write operations.
+			expect(loader.displayName, loader.name).toMatch(/Names? or IDs?$/);
 			expect(loader.description, loader.name).toContain('expression');
 		}
 	});
