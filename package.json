@@ -1,6 +1,6 @@
 {
 	"name": "@syn-con/n8n-nodes-microsoft-365-admin",
-	"version": "0.3.0",
+	"version": "0.3.1",
 	"description": "Microsoft 365 Admin node for n8n: users, groups, authentication methods and licenses via Microsoft Graph, using app-only authentication.",
 	"license": "SEE LICENSE IN LICENSE.md",
 	"homepage": "https://github.com/syn-con/n8n-nodes-microsoft-365-admin#readme",

@@ -186,8 +186,11 @@ function currentUser(this: ILoadOptionsFunctions): string {
 /**
  * Lists the methods of the selected type registered to the selected user.
  *
- * These collections are small and support no `$filter`, so the search term is matched
- * against the labels here rather than sent to Graph.
+ * The type-specific endpoints are inconsistent when a user has none: most answer with an
+ * empty collection, while platformCredentialMethods can answer 404. The aggregate methods
+ * endpoint has stable empty semantics, so the picker reads it and filters by `@odata.type`
+ * here. The collections are small and support no `$filter`, so the search term is also
+ * matched locally.
  */
 export async function getAuthenticationMethods(
 	this: ILoadOptionsFunctions,
@@ -203,11 +206,12 @@ export async function getAuthenticationMethods(
 	const response = (await microsoftApiRequest.call(
 		this,
 		'GET',
-		`/users/${user}/authentication/${methodType}`,
+		`/users/${user}/authentication/methods`,
 	)) as { value?: IDataObject[] };
 
 	const term = filter?.toLowerCase();
 	const results: INodeListSearchItems[] = (response.value ?? [])
+		.filter((method) => methodTypeOf(method['@odata.type']) === methodType)
 		.map((method) => ({ name: describeMethod(method, methodType), value: String(method.id) }))
 		.filter((item) => !term || item.name.toLowerCase().includes(term))
 		.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));

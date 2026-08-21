@@ -200,16 +200,42 @@ describe('the method picker', () => {
 			parameters: { user: USER, methodType: 'phoneMethods' },
 			body: {
 				value: [
-					{ id: 'b', phoneNumber: '+370 600 00002', phoneType: 'alternateMobile' },
-					{ id: 'a', phoneNumber: '+370 600 00001', phoneType: 'mobile' },
+					{
+						'@odata.type': '#microsoft.graph.phoneAuthenticationMethod',
+						id: 'b',
+						phoneNumber: '+370 600 00002',
+						phoneType: 'alternateMobile',
+					},
+					{
+						'@odata.type': '#microsoft.graph.phoneAuthenticationMethod',
+						id: 'a',
+						phoneNumber: '+370 600 00001',
+						phoneType: 'mobile',
+					},
 				],
 			},
 		});
 
 		expect(requests[0].url).toBe(
-			`https://graph.microsoft.com/v1.0/users/${USER}/authentication/phoneMethods`,
+			`https://graph.microsoft.com/v1.0/users/${USER}/authentication/methods`,
 		);
 		expect(result.results.map((r) => r.value)).toEqual(['a', 'b']);
+	});
+
+	it('filters the aggregate response to the selected method type', async () => {
+		const { result } = await list({
+			parameters: { user: USER, methodType: 'platformCredentialMethods' },
+			body: {
+				value: [
+					{
+						'@odata.type': '#microsoft.graph.passwordAuthenticationMethod',
+						id: 'password',
+					},
+				],
+			},
+		});
+
+		expect(result.results).toEqual([]);
 	});
 
 	it('filters on the label, since these collections take no $filter', async () => {
@@ -217,8 +243,16 @@ describe('the method picker', () => {
 			parameters: { user: USER, methodType: 'fido2Methods' },
 			body: {
 				value: [
-					{ id: 'k1', displayName: 'Red key' },
-					{ id: 'k2', displayName: 'Blue key' },
+					{
+						'@odata.type': '#microsoft.graph.fido2AuthenticationMethod',
+						id: 'k1',
+						displayName: 'Red key',
+					},
+					{
+						'@odata.type': '#microsoft.graph.fido2AuthenticationMethod',
+						id: 'k2',
+						displayName: 'Blue key',
+					},
 				],
 			},
 		});

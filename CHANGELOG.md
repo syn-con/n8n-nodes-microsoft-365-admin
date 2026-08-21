@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1
+
+- Empty method pickers now consistently show No results. They filter the aggregate methods
+  endpoint instead of surfacing the 404 that Graph returns for an empty Platform Credential
+  collection.
+
 ## 0.3.0
 
 - New **Authentication** resource for password and MFA administration: Get Many Methods,
