@@ -1,7 +1,7 @@
 import type { INodeProperties } from 'n8n-workflow';
 
 import { ignoreHttpStatusErrorsConfig } from './common';
-import { handleErrorPostReceive } from '../GenericFunctions';
+import { handleErrorPostReceive } from '../GraphErrors';
 
 export const licenseOperations: INodeProperties[] = [
 	{

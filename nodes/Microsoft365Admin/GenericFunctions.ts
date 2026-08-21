@@ -1,22 +1,18 @@
-import {
-	NodeApiError,
-	type JsonObject,
-	type IDataObject,
-	type IExecuteFunctions,
-	type IExecuteSingleFunctions,
-	type IHttpRequestMethods,
-	type IHttpRequestOptions,
-	type ILoadOptionsFunctions,
+import type {
+	IDataObject,
+	IExecuteFunctions,
+	IExecuteSingleFunctions,
+	IHttpRequestMethods,
+	IHttpRequestOptions,
+	ILoadOptionsFunctions,
 	// `requestWithAuthenticationPaginated` is current, but its signature still takes the
 	// deprecated `IRequestOptions`, and n8n ships no paginated equivalent that accepts
 	// `IHttpRequestOptions`. The type is unavoidable until upstream provides one.
 	// eslint-disable-next-line @n8n/community-nodes/no-deprecated-workflow-functions
-	type IRequestOptions,
-	type INodeExecutionData,
-	type IN8nHttpFullResponse,
-	type INodePropertyOptions,
-	type INodeListSearchResult,
-	type INodeListSearchItems,
+	IRequestOptions,
+	INodePropertyOptions,
+	INodeListSearchResult,
+	INodeListSearchItems,
 } from 'n8n-workflow';
 
 import { extractEntityProperties, type DirectoryListResponse } from './utils';
@@ -124,167 +120,6 @@ export async function microsoftApiPaginateRequest(
 	}
 
 	return results;
-}
-
-/** The ID format quoted back whenever an identifier is unusable. */
-const ID_FORMAT = 'The ID should be in the format e.g. 02bd9fd6-8f93-4758-87c3-1fb73740a315';
-
-/** n8n strips an empty body object, so a no-op update reaches Graph with no payload. */
-const EMPTY_PAYLOAD = 'Empty Payload. JSON content expected.';
-
-/** A message to raise in place of Graph's, or `ignore` to let the response through. */
-type ErrorResolution = { message: string; description: string } | 'ignore';
-
-interface ErrorRule {
-	/** The Graph error code this rule answers. */
-	code: string;
-	/** Narrows a code that Graph uses for more than one thing. */
-	when?: (message: string) => boolean;
-	resolve:
-		| ErrorResolution
-		| ((this: IExecuteSingleFunctions, message: string, resource: string) => ErrorResolution);
-}
-
-/** The only thing that varies between the not-found messages is the parameter to blame. */
-function notFound(resource: 'group' | 'user', parameterName: string): ErrorResolution {
-	return {
-		message: `The required ${resource} doesn't match any existing one`,
-		description: `Double-check the value in the parameter '${parameterName}' and try again`,
-	};
-}
-
-/** Keyed by `resource.operation`; the first matching rule wins. */
-const OPERATION_RULES: Record<string, ErrorRule[]> = {
-	'group.delete': [
-		{ code: 'Request_ResourceNotFound', resolve: notFound('group', 'Group to Delete') },
-	],
-	'group.get': [{ code: 'Request_ResourceNotFound', resolve: notFound('group', 'Group to Get') }],
-	'group.update': [
-		{ code: 'BadRequest', when: (message) => message === EMPTY_PAYLOAD, resolve: 'ignore' },
-		{ code: 'Request_ResourceNotFound', resolve: notFound('group', 'Group to Update') },
-	],
-	'user.addGroup': [
-		{
-			code: 'Request_BadRequest',
-			when: (message) =>
-				message ===
-				"One or more added object references already exist for the following modified properties: 'members'.",
-			resolve: {
-				message: 'The user is already in the group',
-				description:
-					'The specified user cannot be added to the group because they are already a member',
-			},
-		},
-		{
-			code: 'Request_ResourceNotFound',
-			// Graph names whichever object it could not find, so the message decides the blame.
-			resolve(message) {
-				const group = this.getNodeParameter('group.value') as string;
-				return message.includes(group)
-					? notFound('group', 'Group')
-					: notFound('user', 'User to Add');
-			},
-		},
-	],
-	'user.delete': [
-		{ code: 'Request_ResourceNotFound', resolve: notFound('user', 'User to Delete') },
-	],
-	'user.get': [{ code: 'Request_ResourceNotFound', resolve: notFound('user', 'User to Get') }],
-	'user.removeGroup': [
-		{
-			code: 'Request_ResourceNotFound',
-			resolve: {
-				message: 'The user is not in the group',
-				description:
-					'The specified user cannot be removed from the group because they are not a member of the group',
-			},
-		},
-		{
-			code: 'Request_UnsupportedQuery',
-			when: (message) =>
-				message === "Unsupported referenced-object resource identifier for link property 'members'.",
-			resolve: { message: 'The user ID is invalid', description: ID_FORMAT },
-		},
-	],
-	'user.update': [
-		{ code: 'BadRequest', when: (message) => message === EMPTY_PAYLOAD, resolve: 'ignore' },
-		{ code: 'Request_ResourceNotFound', resolve: notFound('user', 'User to Update') },
-	],
-};
-
-/** Tried after the operation's own rules, for failures any operation can hit. */
-const GENERIC_RULES: ErrorRule[] = [
-	{
-		code: 'Request_BadRequest',
-		when: (message) => message.startsWith('Invalid object identifier'),
-		resolve(message, resource) {
-			const group = this.getNodeParameter('group.value', '') as string;
-			const parameterResource =
-				resource === 'group' || message.includes(group) ? 'group' : 'user';
-
-			return { message: `The ${parameterResource} ID is invalid`, description: ID_FORMAT };
-		},
-	},
-];
-
-/** Reads Graph's error envelope, which is absent on some gateway failures. */
-export function graphError(body: unknown): {
-	code: string;
-	message: string;
-	details?: Array<{ code: string; message: string }>;
-} {
-	const error = (body as { error?: { code?: string; message?: string; details?: [] } })?.error;
-
-	return { code: error?.code ?? '', message: error?.message ?? '', details: error?.details };
-}
-
-/** The operation's own rules are tried before the generic ones; the first match wins. */
-function findRule(
-	resource: string,
-	operation: string,
-	code: string,
-	message: string,
-): ErrorRule | undefined {
-	const rules = [...(OPERATION_RULES[`${resource}.${operation}`] ?? []), ...GENERIC_RULES];
-
-	return rules.find((rule) => rule.code === code && (!rule.when || rule.when(message)));
-}
-
-export async function handleErrorPostReceive(
-	this: IExecuteSingleFunctions,
-	data: INodeExecutionData[],
-	response: IN8nHttpFullResponse,
-): Promise<INodeExecutionData[]> {
-	const statusCode = String(response.statusCode);
-	if (!statusCode.startsWith('4') && !statusCode.startsWith('5')) {
-		return data;
-	}
-
-	const resource = this.getNodeParameter('resource') as string;
-	const operation = this.getNodeParameter('operation') as string;
-	const { code, message, details } = graphError(response.body);
-	const rule = findRule(resource, operation, code, message);
-
-	if (rule) {
-		const resolution =
-			typeof rule.resolve === 'function' ? rule.resolve.call(this, message, resource) : rule.resolve;
-
-		// The empty-payload case is n8n's doing, not the user's, so the items pass through.
-		if (resolution !== 'ignore') {
-			throw new NodeApiError(this.getNode(), response as unknown as JsonObject, resolution);
-		}
-
-		return data;
-	}
-
-	if (details?.some((detail) => ['ObjectConflict', 'ConflictingObjects'].includes(detail.code))) {
-		throw new NodeApiError(this.getNode(), response as unknown as JsonObject, {
-			message: `The ${resource} already exists`,
-			description: message,
-		});
-	}
-
-	throw new NodeApiError(this.getNode(), response as unknown as JsonObject);
 }
 
 export async function getGroupProperties(
@@ -400,9 +235,15 @@ export async function getGroups(
 ): Promise<INodeListSearchResult> {
 	let response: DirectoryListResponse;
 	if (paginationToken) {
-		response = (await microsoftApiRequest.call(this, 'GET', '/groups', {}, {
-			url: paginationToken,
-		})) as DirectoryListResponse;
+		response = (await microsoftApiRequest.call(
+			this,
+			'GET',
+			'/groups',
+			{},
+			{
+				url: paginationToken,
+			},
+		)) as DirectoryListResponse;
 	} else {
 		const qs: IDataObject = {
 			$select: 'id,displayName',
@@ -446,9 +287,15 @@ export async function getUsers(
 ): Promise<INodeListSearchResult> {
 	let response: DirectoryListResponse;
 	if (paginationToken) {
-		response = (await microsoftApiRequest.call(this, 'GET', '/users', {}, {
-			url: paginationToken,
-		})) as DirectoryListResponse;
+		response = (await microsoftApiRequest.call(
+			this,
+			'GET',
+			'/users',
+			{},
+			{
+				url: paginationToken,
+			},
+		)) as DirectoryListResponse;
 	} else {
 		const qs: IDataObject = {
 			$select: 'id,displayName',

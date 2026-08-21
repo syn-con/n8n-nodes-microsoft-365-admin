@@ -9,6 +9,8 @@ import {
 } from 'n8n-workflow';
 
 import {
+	authenticationFields,
+	authenticationOperations,
 	groupFields,
 	groupOperations,
 	licenseFields,
@@ -16,6 +18,7 @@ import {
 	userFields,
 	userOperations,
 } from './descriptions';
+import { executeResetPassword, getAuthenticationMethods } from './AuthenticationFunctions';
 import {
 	getGroupProperties,
 	getGroups,
@@ -63,6 +66,10 @@ export class Microsoft365Admin implements INodeType {
 				noDataExpression: true,
 				options: [
 					{
+						name: 'Authentication',
+						value: 'authentication',
+					},
+					{
 						name: 'Group',
 						value: 'group',
 					},
@@ -78,6 +85,8 @@ export class Microsoft365Admin implements INodeType {
 				default: 'user',
 			},
 
+			...authenticationOperations,
+			...authenticationFields,
 			...groupOperations,
 			...groupFields,
 			...licenseOperations,
@@ -88,11 +97,21 @@ export class Microsoft365Admin implements INodeType {
 	};
 
 	/**
-	 * The license writes are the one part of this node that cannot be declarative: Entra ID
-	 * applies one license change per tenant at a time and rejects the rest, while
-	 * declarative routing fires every input item's request at once. See LicenseFunctions.ts.
+	 * The operations that declarative routing cannot express.
+	 *
+	 * License writes have to leave one at a time, because Entra ID applies one license change
+	 * per tenant and rejects the rest, while declarative routing fires every input item's
+	 * request at once (see LicenseFunctions.ts). Reset Password has to return the password it
+	 * generated, which a declarative PATCH answering 204 cannot do (see
+	 * AuthenticationFunctions.ts).
 	 */
 	customOperations = {
+		authentication: {
+			async resetPassword(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
+				return executeResetPassword.call(this);
+			},
+		},
+
 		license: {
 			async assign(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
 				return executeLicenseWrite.call(this, 'assign');
@@ -153,6 +172,8 @@ export class Microsoft365Admin implements INodeType {
 		},
 
 		listSearch: {
+			getAuthenticationMethods,
+
 			getGroups,
 
 			getUsers,

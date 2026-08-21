@@ -1,7 +1,7 @@
 # Microsoft 365 Admin
 
-An n8n node for managing users, groups and licenses in Microsoft Entra ID through the
-Microsoft Graph API.
+An n8n node for managing users, groups, authentication methods and licenses in Microsoft
+Entra ID through the Microsoft Graph API.
 
 It authenticates as an application rather than a user, so it runs unattended: no browser
 sign-in, no redirect URI, and no refresh token to expire.
@@ -13,6 +13,9 @@ Get Groups · Get Manager · Set Manager · Revoke Sessions
 
 **Group** — Create · Get · Get Many · Update · Delete · Get Members · Get Owners ·
 Add Owner · Remove Owner
+
+**Authentication** — Get Many Methods · Get Password Method · Delete Method ·
+Create Temporary Access Pass · Reset Password
 
 **License** — Query Tenant Licenses · Query User Licenses · Query License Holders ·
 Assign · Assign to Group · Unassign
@@ -27,7 +30,7 @@ for the `@syn-con` scope. In `~/.npmrc`:
 //npm.pkg.github.com/:_authToken=YOUR_GITHUB_TOKEN
 ```
 
-n8n 1.80 or newer is required: the license write operations run as custom operations, which
+n8n 1.81 or newer is required: the license write operations run as custom operations, which
 older versions do not execute.
 
 Then install it into your n8n instance and restart:
@@ -60,9 +63,17 @@ app-only connection and every call comes back 403.
 | `Organization.Read.All` | the connection test and tenant license queries |
 | `User.ReadWrite.All` | all user operations and user licensing |
 | `Group.ReadWrite.All` | all group operations, including members and owners |
+| `UserAuthenticationMethod.ReadWrite.All` | Authentication → Get Many Methods, Get Password Method, Delete Method and Create Temporary Access Pass |
+| `User-PasswordProfile.ReadWrite.All` | Authentication → Reset Password through `passwordProfile` |
 
 Then click **Grant admin consent**. This needs Global Administrator or Privileged Role
 Administrator — Application Administrator is not enough.
+
+Reset Password additionally requires the application's service principal to hold at least
+the **User Administrator** Microsoft Entra role. Resetting privileged administrators is
+subject to the Entra role hierarchy and can require **Privileged Authentication
+Administrator**. These directory roles are separate from Microsoft Graph application
+permissions.
 
 ### 3. Add the credential
 
@@ -104,6 +115,37 @@ Options also carries *Max Retries* (default 5) and *Wait Between Requests*, for 
 where something outside the workflow — an admin in the portal, another automation — is
 competing for the same lock.
 
+**Password reset goes through `passwordProfile`, not the authentication methods API.**
+Graph's `POST /users/{id}/authentication/methods/{id}/resetPassword` supports delegated
+access only — there is no application permission for it, so an app-only credential like
+this one can never call it, whatever roles the app holds. Authentication → **Reset Password**
+therefore PATCHes **passwordProfile** instead, which is the app-only equivalent: it writes
+to Entra ID and, where password writeback is configured, on to on-premises AD. Leave the
+Password option empty and the node generates one and returns it as `password` on the output
+item — the only place a generated password exists, so capture it in the same run.
+
+**Deleting a method needs its type as well as its ID.** Each method type lives in its own
+Graph collection, and `Get Many Methods` reports an `@odata.type` rather than the URL
+segment a delete needs. The node fills that gap: every method it returns carries
+`methodType` (`phoneMethods`, `fido2Methods`, …), `methodName` and `deletable`, so an MFA
+reset is Get Many Methods → Filter on `deletable` → Delete Method with
+`{{ $json.methodType }}` and `{{ $json.id }}`. Picking by hand works too: choose the type,
+and the Method list shows what that user has registered.
+
+**Some methods refuse to be deleted.** Graph rejects deleting a phone number that is the
+user's default MFA method — the user has to change their default first — and there is no
+delete for a password at all. A `mobile` number cannot be removed while an
+`alternateMobile` one exists.
+
+**A Temporary Access Pass is returned once.** The `temporaryAccessPass` field of the
+response is the passcode; it is never readable again. A user can hold only one usable pass,
+so issuing a second replaces the first. A multi-use pass is only accepted if the Temporary
+Access Pass authentication method policy allows it, and the method has to be enabled in
+that policy for the target user at all — otherwise Graph refuses to issue one.
+
+**Revoking sessions is under User, not Authentication** — User → Revoke Sessions
+invalidates refresh tokens and browser sessions, which pairs well with a password reset.
+
 **Set `usageLocation` before licensing a user.** Assigning a license to a user without one
 fails with an error that looks like a permissions problem. Set it first with User → Update
 using a two-letter country code, e.g. `LT`.
@@ -117,7 +159,9 @@ instead.
 successful response does not mean they are licensed yet.
 
 **Users holding admin roles need more than Graph permissions.** To modify them the app
-also has to be assigned a directory role such as User Administrator.
+also has to be assigned a directory role such as User Administrator — and Authentication
+Administrator for the Authentication resource, or Privileged Authentication Administrator
+to act on privileged accounts.
 
 ## Using expressions
 

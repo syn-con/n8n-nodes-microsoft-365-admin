@@ -38,7 +38,8 @@ const conflict: Response = {
 	body: {
 		error: {
 			code: 'Directory_ConcurrencyViolation',
-			message: 'Error due to concurrent requests being made to the tenant. Please wait briefly and retry.',
+			message:
+				'Error due to concurrent requests being made to the tenant. Please wait briefly and retry.',
 		},
 	},
 };
@@ -339,11 +340,7 @@ describe('combining items', () => {
 
 		// Every input item still gets its own output item, in order.
 		expect(output).toHaveLength(3);
-		expect(output.map((item) => item.pairedItem)).toEqual([
-			{ item: 0 },
-			{ item: 1 },
-			{ item: 2 },
-		]);
+		expect(output.map((item) => item.pairedItem)).toEqual([{ item: 0 }, { item: 1 }, { item: 2 }]);
 	});
 
 	it('gives each item of a merged request its own copy of the response', async () => {
@@ -536,6 +533,37 @@ describe('tenant conflicts', () => {
 		await executeLicenseWrite.call(ctx, 'assign');
 
 		expect(sleep).toHaveBeenCalledExactlyOnceWith(12_000);
+	});
+
+	it.each([
+		[
+			'the plan-conflict message',
+			{
+				code: 'Request_BadRequest',
+				message:
+					'License assignment failed because service plan 5136a095-5cf0-4aff-bec3-e84448b38ea5 conflicts with service plan 43de0ff5-c92c-492b-9116-175376d08c38.',
+			},
+		],
+		[
+			'the MutuallyExclusiveViolation detail',
+			{
+				code: 'Request_BadRequest',
+				message: 'License assignment failed.',
+				details: [{ code: 'MutuallyExclusiveViolation', message: 'conflict' }],
+			},
+		],
+	])('explains overlapping service plans, given %s', async (_label, error) => {
+		const { ctx, httpRequestWithAuthentication } = context({
+			parameters: { user: 'user-1', skuId: [E3, E5] },
+			responses: [{ statusCode: 400, body: { error } }],
+		});
+
+		await expect(executeLicenseWrite.call(ctx, 'assign')).rejects.toThrow(
+			/refused this combination/,
+		);
+		// Nothing about it improves with time, so it must not burn the retry budget.
+		expect(httpRequestWithAuthentication).toHaveBeenCalledTimes(1);
+		expect(sleep).not.toHaveBeenCalled();
 	});
 
 	it('does not retry a request Entra will keep rejecting', async () => {

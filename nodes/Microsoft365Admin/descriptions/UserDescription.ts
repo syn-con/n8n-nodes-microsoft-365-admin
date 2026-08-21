@@ -11,8 +11,9 @@ import {
 	type INodeProperties,
 } from 'n8n-workflow';
 
-import { ignoreHttpStatusErrorsConfig } from './common';
-import { handleErrorPostReceive, microsoftApiRequest } from '../GenericFunctions';
+import { ignoreHttpStatusErrorsConfig, userLocator as sharedUserLocator } from './common';
+import { microsoftApiRequest } from '../GenericFunctions';
+import { handleErrorPostReceive } from '../GraphErrors';
 import { deepMerge } from '../utils';
 
 /**
@@ -2184,40 +2185,8 @@ const updateFields: INodeProperties[] = [
 ];
 
 /** The user picker, reused by the operations that target a single user. */
-const userLocator = (operation: string, description: string): INodeProperties => ({
-	displayName: 'User',
-	name: 'user',
-	default: {
-		mode: 'list',
-		value: '',
-	},
-	description,
-	displayOptions: {
-		show: {
-			resource: ['user'],
-			operation: [operation],
-		},
-	},
-	modes: [
-		{
-			displayName: 'From List',
-			name: 'list',
-			type: 'list',
-			typeOptions: {
-				searchListMethod: 'getUsers',
-				searchable: true,
-			},
-		},
-		{
-			displayName: 'By ID',
-			name: 'id',
-			placeholder: 'e.g. 02bd9fd6-8f93-4758-87c3-1fb73740a315',
-			type: 'string',
-		},
-	],
-	required: true,
-	type: 'resourceLocator',
-});
+const userLocator = (operation: string, description: string): INodeProperties =>
+	sharedUserLocator('user', operation, description);
 
 const getGroupsFields: INodeProperties[] = [
 	userLocator('getGroups', 'The user whose group memberships should be retrieved'),

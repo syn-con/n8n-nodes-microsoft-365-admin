@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.3.0
+
+- New **Authentication** resource for password and MFA administration: Get Many Methods,
+  Get Password Method, Delete Method, Create Temporary Access Pass and Reset Password
+- Get Many Methods adds `methodType`, `methodName` and `deletable` to each method, so its
+  output can be piped straight into Delete Method — Graph reports an `@odata.type`, not the
+  collection segment the delete URL needs
+- Delete Method covers every type Graph can delete in v1.0 (Microsoft Authenticator, phone,
+  FIDO2, email, software OATH, Temporary Access Pass, Windows Hello, platform credential)
+  and its Method picker lists what the chosen user actually has registered
+- Reset Password writes `passwordProfile`, generates a password when none is given and
+  returns it on the output item. Graph's `authentication/methods/{id}/resetPassword` is
+  delegated-only, so an app-only credential cannot call it.
+- Create Temporary Access Pass now sends an empty JSON object when no options are selected,
+  allowing Graph to apply the tenant policy defaults instead of rejecting an empty payload
+- Setup guidance now includes the new `UserAuthenticationMethod.ReadWrite.All` and
+  `User-PasswordProfile.ReadWrite.All` application permissions. Reset Password also
+  documents its required User Administrator service-principal role.
+- Revoking sessions was already available as User → Revoke Sessions
+- Internal: Graph error handling moved out of GenericFunctions into GraphErrors, the User
+  picker and the custom-operation error helpers are now shared
+
 ## 0.2.0
 
 - License Assign, Assign to Group and Unassign now send their requests one at a time and
@@ -21,7 +43,7 @@
 - Internal: one Graph request builder shared by every operation, the Graph error messages
   moved to a rule table, and the user field conversions shared by create and update — the
   package now lints clean with no warnings
-- Requires n8n 1.80 or newer
+- Requires n8n 1.81 or newer
 - Existing workflows keep working — a single SKU ID, and a comma-separated list from an
   expression, are both still accepted — but the field is now a multi-select, so re-open the
   node if the picker looks empty
@@ -36,4 +58,3 @@
 - Initial release: Microsoft 365 Admin node with User, Group and License resources
 - App-only (service principal) authentication via the client credentials grant
 - Derived from the built-in n8n Microsoft Entra ID node; see LICENSE.md
-

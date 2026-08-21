@@ -14,10 +14,10 @@ import {
 	getSubscribedSkus,
 	getUserProperties,
 	getUsers,
-	handleErrorPostReceive,
 	microsoftApiPaginateRequest,
 	microsoftApiRequest,
 } from './GenericFunctions';
+import { handleErrorPostReceive } from './GraphErrors';
 import { deepMerge } from './utils';
 
 const CREDENTIAL = 'microsoft365AdminServicePrincipalApi';
@@ -76,7 +76,10 @@ describe('deepMerge', () => {
 	});
 
 	it('merges nested objects rather than replacing them', () => {
-		const result = deepMerge({ nested: { keep: 1, replace: 1 } }, { nested: { replace: 2, add: 3 } });
+		const result = deepMerge(
+			{ nested: { keep: 1, replace: 1 } },
+			{ nested: { replace: 2, add: 3 } },
+		);
 		expect(result).toEqual({ nested: { keep: 1, replace: 2, add: 3 } });
 	});
 
@@ -191,7 +194,10 @@ describe('microsoftApiPaginateRequest', () => {
 	it('follows @odata.nextLink through the pagination options', async () => {
 		const paginated = vi.fn(async () => []);
 		const context = mockContext({
-			helpers: { httpRequestWithAuthentication: vi.fn(), requestWithAuthenticationPaginated: paginated },
+			helpers: {
+				httpRequestWithAuthentication: vi.fn(),
+				requestWithAuthenticationPaginated: paginated,
+			},
 		});
 
 		await microsoftApiPaginateRequest.call(context, 'GET', '/users');
@@ -443,11 +449,11 @@ describe('handleErrorPostReceive', () => {
 	const items = [{ json: {} }];
 
 	it('passes successful responses through untouched', async () => {
-		const result = await handleErrorPostReceive.call(
-			errorContext('user', 'get'),
-			items,
-			{ statusCode: 200, body: {}, headers: {} } as unknown as IN8nHttpFullResponse,
-		);
+		const result = await handleErrorPostReceive.call(errorContext('user', 'get'), items, {
+			statusCode: 200,
+			body: {},
+			headers: {},
+		} as unknown as IN8nHttpFullResponse);
 		expect(result).toBe(items);
 	});
 
@@ -565,8 +571,7 @@ describe('handleErrorPostReceive', () => {
 				items,
 				response(400, {
 					code: 'Request_UnsupportedQuery',
-					message:
-						"Unsupported referenced-object resource identifier for link property 'members'.",
+					message: "Unsupported referenced-object resource identifier for link property 'members'.",
 				}),
 			),
 		).rejects.toThrow(/user ID is invalid/);

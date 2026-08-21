@@ -1,4 +1,10 @@
-import type { IDataObject } from 'n8n-workflow';
+import {
+	NodeApiError,
+	NodeOperationError,
+	type IDataObject,
+	type IExecuteFunctions,
+	type INodeExecutionData,
+} from 'n8n-workflow';
 
 function isPlainObject(value: unknown): value is IDataObject {
 	return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -34,7 +40,9 @@ export function deepMerge(target: IDataObject, source: IDataObject): IDataObject
  * immediately after the angle bracket.
  */
 export function extractEntityProperties(metadata: string, entityNames: string[]): string[] {
-	const schema = /<Schema[^>]*Namespace="microsoft\.graph"[^>]*>([\s\S]*?)<\/Schema>/.exec(metadata);
+	const schema = /<Schema[^>]*Namespace="microsoft\.graph"[^>]*>([\s\S]*?)<\/Schema>/.exec(
+		metadata,
+	);
 	const scope = schema?.[1] ?? metadata;
 
 	const properties: string[] = [];
@@ -59,4 +67,18 @@ export function extractEntityProperties(metadata: string, entityNames: string[])
 export interface DirectoryListResponse {
 	value?: Array<{ id: string; displayName: string }>;
 	'@odata.nextLink'?: string;
+}
+
+/** What an item carries out of a custom operation when the run continues on failure. */
+export function errorItem(error: unknown, itemIndex: number): INodeExecutionData {
+	return { json: { error: (error as Error).message }, pairedItem: { item: itemIndex } };
+}
+
+/** Anything that is not already a node error would otherwise reach n8n unwrapped. */
+export function asNodeError(this: IExecuteFunctions, error: unknown, itemIndex: number): Error {
+	if (error instanceof NodeApiError || error instanceof NodeOperationError) {
+		return error;
+	}
+
+	return new NodeOperationError(this.getNode(), error as Error, { itemIndex });
 }

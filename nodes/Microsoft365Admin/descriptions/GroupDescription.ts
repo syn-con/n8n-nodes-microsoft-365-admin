@@ -11,7 +11,8 @@ import {
 } from 'n8n-workflow';
 
 import { ignoreHttpStatusErrorsConfig } from './common';
-import { handleErrorPostReceive, microsoftApiRequest } from '../GenericFunctions';
+import { microsoftApiRequest } from '../GenericFunctions';
+import { handleErrorPostReceive } from '../GraphErrors';
 import { deepMerge } from '../utils';
 
 // A mail nickname must be ASCII 0-127 excluding a set of reserved characters. The
@@ -1257,10 +1258,13 @@ const updateFields: INodeProperties[] = [
 							];
 							const separateFields = Object.keys(fields)
 								.filter((key) => separateProperties.includes(key))
-								.reduce((obj, key) => ({
+								.reduce(
+									(obj, key) => ({
 										...obj,
 										[key]: fields[key],
-									}), {});
+									}),
+									{},
+								);
 							if (Object.keys(separateFields).length) {
 								const body: IDataObject = {
 									...separateFields,

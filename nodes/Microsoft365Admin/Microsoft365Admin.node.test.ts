@@ -2,7 +2,13 @@ import type { IExecuteFunctions, INodeProperties, INodePropertyOptions } from 'n
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('./LicenseFunctions', () => ({ executeLicenseWrite: vi.fn(async () => [[]]) }));
+// Partial, so the descriptions keep the real hooks they reference.
+vi.mock('./AuthenticationFunctions', async (importOriginal) => ({
+	...(await importOriginal<typeof import('./AuthenticationFunctions')>()),
+	executeResetPassword: vi.fn(async () => [[]]),
+}));
 
+import { executeResetPassword } from './AuthenticationFunctions';
 import { executeLicenseWrite } from './LicenseFunctions';
 import { Microsoft365Admin } from './Microsoft365Admin.node';
 
@@ -58,19 +64,57 @@ describe('node identity', () => {
 });
 
 describe('resources', () => {
-	it('exposes group, license and user', () => {
+	it('exposes authentication, group, license and user', () => {
 		const values = (propertyNamed('resource').options as INodePropertyOptions[]).map(
 			(o) => o.value,
 		);
-		expect(values).toEqual(['group', 'license', 'user']);
+		expect(values).toEqual(['authentication', 'group', 'license', 'user']);
 	});
 });
 
 describe('operations', () => {
 	it.each([
-		['user', ['addGroup', 'create', 'delete', 'get', 'getGroups', 'getManager', 'getAll', 'removeGroup', 'revokeSessions', 'setManager', 'update']],
-		['group', ['addOwner', 'create', 'delete', 'get', 'getAll', 'getMembers', 'getOwners', 'removeOwner', 'update']],
+		[
+			'user',
+			[
+				'addGroup',
+				'create',
+				'delete',
+				'get',
+				'getGroups',
+				'getManager',
+				'getAll',
+				'removeGroup',
+				'revokeSessions',
+				'setManager',
+				'update',
+			],
+		],
+		[
+			'group',
+			[
+				'addOwner',
+				'create',
+				'delete',
+				'get',
+				'getAll',
+				'getMembers',
+				'getOwners',
+				'removeOwner',
+				'update',
+			],
+		],
 		['license', ['assign', 'assignGroup', 'queryHolders', 'queryTenant', 'queryUser', 'unassign']],
+		[
+			'authentication',
+			[
+				'createTemporaryAccessPass',
+				'deleteMethod',
+				'getAllMethods',
+				'getPasswordMethod',
+				'resetPassword',
+			],
+		],
 	])('%s exposes the expected operations', (resource, expected) => {
 		expect(operationsFor(resource).map((o) => o.value)).toEqual(expected);
 	});
@@ -78,7 +122,7 @@ describe('operations', () => {
 	it('gives every operation an action label and a way to execute', () => {
 		const custom = node.customOperations as Record<string, Record<string, unknown>>;
 
-		for (const resource of ['user', 'group', 'license']) {
+		for (const resource of ['user', 'group', 'license', 'authentication']) {
 			for (const operation of operationsFor(resource)) {
 				const label = `${resource}.${operation.value}`;
 				// Either declarative routing or a custom handler — never both, since a custom
@@ -93,7 +137,7 @@ describe('operations', () => {
 	});
 
 	it('lists operations alphabetically by display name', () => {
-		for (const resource of ['user', 'group', 'license']) {
+		for (const resource of ['user', 'group', 'license', 'authentication']) {
 			const names = operationsFor(resource).map((o) => o.name);
 			expect(names, resource).toEqual([...names].sort((a, b) => a.localeCompare(b)));
 		}
@@ -188,6 +232,100 @@ describe('license query bodies', () => {
 	});
 });
 
+describe('authentication methods', () => {
+	function routingFor(operation: string) {
+		return operationsFor('authentication').find((o) => o.value === operation)?.routing?.request;
+	}
+
+	it('lists a user’s methods, and reads the password method from its own collection', () => {
+		expect(routingFor('getAllMethods')?.url).toContain('/authentication/methods');
+		expect(routingFor('getPasswordMethod')?.url).toContain('/authentication/passwordMethods');
+	});
+
+	it('addresses a method by its collection as well as its ID', () => {
+		// An ID alone is not enough: each method type lives under its own segment.
+		const url = routingFor('deleteMethod')?.url ?? '';
+		expect(routingFor('deleteMethod')?.method).toBe('DELETE');
+		expect(url).toContain('methodType');
+		expect(url.indexOf('methodType')).toBeLessThan(url.indexOf('$parameter["method"]'));
+	});
+
+	it('offers only method types that Graph can delete in v1.0', () => {
+		const types = fieldsFor('authentication', 'deleteMethod').find((p) => p.name === 'methodType');
+		const values = (types?.options ?? []).map((o) => (o as INodePropertyOptions).value);
+
+		expect(values).toContain('microsoftAuthenticatorMethods');
+		expect(values).toContain('phoneMethods');
+		expect(values).toContain('fido2Methods');
+		// Graph has no delete for a password, and beta-only types are out of reach here.
+		expect(values).not.toContain('passwordMethods');
+	});
+
+	it('posts a temporary access pass with the policy defaults left out', () => {
+		const routing = routingFor('createTemporaryAccessPass');
+		expect(routing?.url).toContain(
+			'/authentication/temporaryAccessPassMethods',
+		);
+		expect(routing?.body).toBe('={{ $parameter["options"] || {} }}');
+
+		const options = fieldsFor('authentication', 'createTemporaryAccessPass').find(
+			(p) => p.name === 'options',
+		);
+		const sent = (options?.options ?? []).map(
+			(o) => (o as INodeProperties).routing?.send?.property,
+		);
+
+		expect(sent).toEqual(['isUsableOnce', 'lifetimeInMinutes', 'startDateTime']);
+	});
+
+	it('keeps the pass lifetime inside the range Graph accepts', () => {
+		const options = fieldsFor('authentication', 'createTemporaryAccessPass').find(
+			(p) => p.name === 'options',
+		);
+		const lifetime = (options?.options ?? []).find(
+			(o) => (o as INodeProperties).name === 'lifetimeInMinutes',
+		) as INodeProperties;
+
+		expect(lifetime.typeOptions).toMatchObject({ minValue: 10, maxValue: 43200 });
+	});
+
+	it('routes the password reset through a custom operation', async () => {
+		// The authentication methods API cannot reset a password app-only, so this one
+		// writes passwordProfile instead — and has to return the password it generated.
+		expect(routingFor('resetPassword')).toBeUndefined();
+
+		const context = { getInputData: () => [] } as unknown as IExecuteFunctions;
+		await node.customOperations.authentication.resetPassword.call(context);
+
+		expect(executeResetPassword).toHaveBeenCalled();
+		expect(vi.mocked(executeResetPassword).mock.contexts.at(-1)).toBe(context);
+	});
+
+	it('guards the request path of every declarative operation', () => {
+		// A user or method ID arriving from workflow data goes into the URL, so each of these
+		// operations has to carry the check. Reset Password does its own, being programmatic.
+		for (const operation of operationsFor('authentication')) {
+			const value = operation.value as string;
+			if (value === 'resetPassword') continue;
+
+			const guarded = fieldsFor('authentication', value).some(
+				(p) => (p.routing?.send?.preSend ?? []).length > 0,
+			);
+			expect(guarded, value).toBe(true);
+		}
+	});
+
+	it('asks for the user on every operation', () => {
+		for (const operation of operationsFor('authentication')) {
+			const fields = fieldsFor('authentication', operation.value as string);
+			expect(
+				fields.some((p) => p.name === 'user' && p.type === 'resourceLocator'),
+				operation.value as string,
+			).toBe(true);
+		}
+	});
+});
+
 describe('expression capability', () => {
 	it('blocks expressions only on resource and operation', () => {
 		const blocked = description.properties.filter((p) => p.noDataExpression).map((p) => p.name);
@@ -258,7 +396,9 @@ describe('loadOptions and listSearch wiring', () => {
 	// Drives the real metadata chain rather than stubbing the loader, so the filtering
 	// is exercised against the same parsing the node uses at runtime.
 	function metadataContext(entity: string, properties: string[]) {
-		const declarations = properties.map((p) => `<Property Name="${p}" Type="Edm.String"/>`).join('');
+		const declarations = properties
+			.map((p) => `<Property Name="${p}" Type="Edm.String"/>`)
+			.join('');
 		const metadata =
 			'<Schema Namespace="microsoft.graph">' +
 			`<EntityType Name="${entity}">${declarations}</EntityType>` +
@@ -271,7 +411,11 @@ describe('loadOptions and listSearch wiring', () => {
 	}
 
 	it('filters list-unsupported properties out of the group getAll selector', async () => {
-		const context = metadataContext('group', ['displayName', 'allowExternalSenders', 'unseenCount']);
+		const context = metadataContext('group', [
+			'displayName',
+			'allowExternalSenders',
+			'unseenCount',
+		]);
 
 		const all = await node.methods.loadOptions.getGroupProperties.call(context);
 		const forGetAll = await node.methods.loadOptions.getGroupPropertiesGetAll.call(context);

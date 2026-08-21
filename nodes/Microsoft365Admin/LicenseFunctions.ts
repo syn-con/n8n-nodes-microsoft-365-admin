@@ -10,7 +10,9 @@ import {
 } from 'n8n-workflow';
 
 import { ignoreHttpStatusErrorsConfig } from './descriptions/common';
-import { graphError, microsoftApiRequest } from './GenericFunctions';
+import { microsoftApiRequest } from './GenericFunctions';
+import { graphError } from './GraphErrors';
+import { asNodeError, errorItem } from './utils';
 
 /**
  * Assign, Assign to Group and Unassign all post to `assignLicense`, which Entra ID
@@ -22,7 +24,7 @@ import { graphError, microsoftApiRequest } from './GenericFunctions';
  * Declarative routing cannot survive that. n8n's RoutingNode builds one request per input
  * item and hands the whole array to `Promise.allSettled`, so a run over 20 users fires 20
  * simultaneous writes and all but one of them fail. These three operations are therefore
- * registered as `customOperations` (requires n8n 1.80 or newer) so that they can:
+ * registered as `customOperations` (requires n8n 1.81 or newer) so that they can:
  *
  *   - send one request at a time,
  *   - fold every item aimed at the same user or group into a single request, since one
@@ -194,6 +196,22 @@ function queueWrite(writes: LicenseWrite[], candidate: LicenseWrite, combineItem
 	existing.itemIndexes.push(...candidate.itemIndexes);
 }
 
+/**
+ * Two licences cannot both switch on the same service plan for one user, and Entra assigns
+ * what it can before refusing the rest — so this failure usually arrives with part of the
+ * request already applied. Retrying it never helps.
+ */
+const PLAN_CONFLICT = /conflicts with service plan|mutually exclusive/i;
+
+function isPlanConflict(response: IN8nHttpFullResponse): boolean {
+	const { message, details } = graphError(response.body);
+
+	return (
+		details?.some((detail) => detail.code === 'MutuallyExclusiveViolation') === true ||
+		PLAN_CONFLICT.test(message)
+	);
+}
+
 /** True when the failure is about the tenant being busy rather than about the request. */
 function isRetryable(response: IN8nHttpFullResponse): boolean {
 	const statusCode = Number(response.statusCode);
@@ -241,6 +259,14 @@ function writeError(
 ): NodeApiError {
 	const body = response as unknown as JsonObject;
 
+	if (isPlanConflict(response)) {
+		return new NodeApiError(this.getNode(), body, {
+			itemIndex,
+			message: 'Microsoft refused this combination of licenses',
+			description: `${graphError(response.body).message} Two SKUs cannot both enable the same service plan for one user, and Entra assigns what it can before refusing the rest — so a license it managed to apply stays applied, which is why part of the change appears to have worked. Switch the overlapping plan off on one of the SKUs under Options → Disabled Plans, or assign only one of them. License → Query Tenant Licenses lists the servicePlans each SKU contains.`,
+		});
+	}
+
 	if (!isRetryable(response)) {
 		return new NodeApiError(this.getNode(), body, { itemIndex });
 	}
@@ -273,7 +299,7 @@ async function licenseWriteRequest(
 		if (Number(response.statusCode) < 400) {
 			// Group assignments answer 202 Accepted, and an empty body arrives as `''` rather
 			// than as an object — which would leave the item's `json` set to a string.
-			const body = response.body;
+			const { body } = response;
 
 			return (body && typeof body === 'object' ? body : {}) as IDataObject;
 		}
@@ -302,20 +328,6 @@ function writeOptions(this: IExecuteFunctions): WriteOptions {
 		maxRetries: Math.min(RETRY_LIMIT, Math.max(0, options.maxRetries ?? DEFAULT_MAX_RETRIES)),
 		waitBetweenRequests: Math.max(0, options.waitBetweenRequests ?? 0),
 	};
-}
-
-/** What an item carries out when the run is set to continue on failure. */
-function errorItem(error: unknown, itemIndex: number): INodeExecutionData {
-	return { json: { error: (error as Error).message }, pairedItem: { item: itemIndex } };
-}
-
-/** Anything that is not already a node error would otherwise reach n8n unwrapped. */
-function asNodeError(this: IExecuteFunctions, error: unknown, itemIndex: number): Error {
-	if (error instanceof NodeApiError || error instanceof NodeOperationError) {
-		return error;
-	}
-
-	return new NodeOperationError(this.getNode(), error as Error, { itemIndex });
 }
 
 /** Carries the run-wide lookups that only some items need. */
