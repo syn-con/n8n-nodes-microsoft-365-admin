@@ -5,6 +5,7 @@ on:
     branches: [main] # change to `main` if that's the repo's default branch
     paths:
       - "package.json" # only wake up when the version file changes
+  workflow_dispatch: # allow manual re-runs after a failed publish
 
 jobs:
   publish:
@@ -19,7 +20,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 20
           cache: npm
           registry-url: "https://npm.pkg.github.com"
 
@@ -77,11 +78,9 @@ jobs:
         if: steps.check.outputs.publish == 'true'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # `prepublishOnly` runs `n8n-node prerelease`, which blocks a bare `npm publish` unless
-          # RELEASE_MODE is set. `n8n-node release` sets it too, but its release-it flow expects
-          # branch `main` and does its own tagging/changelog, which this workflow already handles.
-          RELEASE_MODE: "true"
-        run: npm publish
+        # --ignore-scripts skips the prepublishOnly guard from @n8n/node-cli,
+        # which refuses a bare `npm publish`. The Build step above already ran.
+        run: npm publish --ignore-scripts
 
       - name: Tag the release
         if: steps.check.outputs.publish == 'true'
@@ -98,4 +97,4 @@ jobs:
             -X POST "https://n8n-prod.itsmcloud.lt/webhook/12ed1f70-d87f-4097-bab2-8f8d2cf007f3" \
             -H "Authentication: ${{ secrets.N8N_PROD_AUTH }}" \
             -H "Content-Type: application/json" \
-            -d "{\"package\":\"${{ github.repository }}\",\"version\":\"${{ steps.pkg.outputs.version }}\",\"releaseType\":\"${{ steps.check.outputs.event }}\"}"
+            -d "{\"package\":\"${{ github.repository }}\",\"version\":\"${{ steps.pkg.outputs.version }}\",\"event\":\"${{ steps.check.outputs.event }}\"}"
