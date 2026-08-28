@@ -1,4 +1,5 @@
 # Microsoft 365 Admin
+[![NPM Version](https://img.shields.io/npm/v/@synergyconsulting/n8n-nodes-microsoft-365-admin?style=flat-square)](https://www.npmjs.com/package/@synergyconsulting/n8n-nodes-microsoft-365-admin)
 
 An n8n node for managing users, groups, authentication methods and licenses in Microsoft
 Entra ID through the Microsoft Graph API.
