@@ -22,7 +22,7 @@ Thumbs.db
 *.log
 npm-debug.log*
 
-# Local secrets — the registry auth token for @syn-con lives here
+# Local secrets — the registry auth token for @synergyconsulting lives here
 .npmrc
 .env
 .env.local

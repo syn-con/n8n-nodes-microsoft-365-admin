@@ -1,6 +1,6 @@
 {
-	"name": "@syn-con/n8n-nodes-microsoft-365-admin",
-	"version": "0.3.1",
+	"name": "@synergyconsulting/n8n-nodes-microsoft-365-admin",
+	"version": "1.0.0",
 	"description": "Microsoft 365 Admin node for n8n: users, groups, authentication methods and licenses via Microsoft Graph, using app-only authentication.",
 	"license": "SEE LICENSE IN LICENSE.md",
 	"homepage": "https://github.com/syn-con/n8n-nodes-microsoft-365-admin#readme",
@@ -16,7 +16,10 @@
 		"url": "https://github.com/syn-con/n8n-nodes-microsoft-365-admin.git"
 	},
 	"publishConfig": {
-		"registry": "https://npm.pkg.github.com"
+		"access": "public"
+	},
+	"engines": {
+		"node": ">=20.15"
 	},
 	"scripts": {
 		"build": "n8n-node build",

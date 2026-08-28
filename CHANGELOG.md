@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.0.0
+
+Restructured to n8n's standard actions/transport architecture, and renamed the npm scope.
+
+- **Breaking:** the npm scope is now `@synergyconsulting`. The package is
+  `@synergyconsulting/n8n-nodes-microsoft-365-admin`, which also changes the node's type ID
+  from `@syn-con/….microsoft365Admin` to `@synergyconsulting/….microsoft365Admin`. Existing
+  workflows will not resolve the node until it is reinstalled under the new scope and the
+  affected nodes are re-selected.
+- Each operation is now its own file under `actions/<resource>/`, owning its parameters and
+  its own request, dispatched by `actions/router.ts`. Graph requests, paging and error
+  translation moved to `transport/`; the pickers to `methods/`. The four description files
+  and `customOperations` are gone. See the README for the layout.
+- A no-op Update no longer sends an empty PATCH for Graph to reject and the node to swallow;
+  it simply makes no request.
+- Group Email Address validation no longer accepts ASCII control characters, which Graph
+  rejects anyway.
+- Fixed every finding of n8n's community-package scanner except the licence, which cannot be
+  MIT while the node is derived from n8n's Sustainable Use Licensed source. Notably the
+  scanner ignores inline eslint-disable comments, so the suppressions the code relied on
+  were doing nothing.
+- CI now runs on `main` — it was configured for `master` and never ran on pushes — and runs
+  the test suite.
+- Documentation URLs in the node's codex file pointed at n8n's built-in Microsoft Entra ID
+  node; they now point at this package.
+
 ## 0.3.1
 
 - Empty method pickers now consistently show No results. They filter the aggregate methods

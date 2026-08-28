@@ -303,9 +303,8 @@ export class Microsoft365AdminServicePrincipalApi implements ICredentialType {
 	// or during a credential test. Core drives expiry refresh through its 401 retry path,
 	// so we deliberately do not persist `expires_in` or run a credential-side TTL.
 	async preAuthentication(this: IHttpRequestHelper, credentials: ICredentialDataDecryptedObject) {
-		const accessToken = await getAccessToken(
-			credentials,
-			async (options) => this.helpers.httpRequest(options),
+		const accessToken = await getAccessToken(credentials, async (options) =>
+			this.helpers.httpRequest(options),
 		);
 		return { accessToken };
 	}

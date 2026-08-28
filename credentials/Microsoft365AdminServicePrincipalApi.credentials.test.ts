@@ -52,9 +52,7 @@ describe('getAccessToken', () => {
 
 		const [request] = poster.calls;
 		expect(request.method).toBe('POST');
-		expect(request.url).toBe(
-			`https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/token`,
-		);
+		expect(request.url).toBe(`https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/token`);
 		expect(request.headers?.['Content-Type']).toBe('application/x-www-form-urlencoded');
 
 		const body = bodyOf(request);
@@ -96,7 +94,10 @@ describe('getAccessToken', () => {
 	});
 
 	it('normalises a trailing slash on the base URL before resolving the cloud', async () => {
-		await getAccessToken(credentials({ graphApiBaseUrl: 'https://graph.microsoft.us/' }), poster.post);
+		await getAccessToken(
+			credentials({ graphApiBaseUrl: 'https://graph.microsoft.us/' }),
+			poster.post,
+		);
 
 		expect(poster.calls[0].url).toContain('login.microsoftonline.us');
 	});

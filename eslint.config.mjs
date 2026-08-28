@@ -4,10 +4,12 @@ import { config as n8nConfig } from '@n8n/node-cli/eslint';
 export default [
 	...n8nConfig,
 	{
+		// Test files are deliberately NOT ignored. n8n's verification scanner lints
+		// everything under `nodes/` and `credentials/` — tests included — so excluding
+		// them here would hide gate failures until submission.
 		ignores: [
 			'dist/**',
 			'node_modules/**',
-			'**/*.test.ts',
 			'*.js',
 			'*.cjs',
 			'*.mjs',
@@ -15,14 +17,10 @@ export default [
 			'.coverage/**',
 		],
 	},
-	{
-		files: ['package.json'],
-		rules: {
-			// This node is derived from n8n's Sustainable Use Licensed source, so the
-			// package cannot claim MIT. See LICENSE.md.
-			'n8n-nodes-base/community-package-json-license-not-default': 'off',
-		},
-	},
+	// NOTE: no rule is switched off for `package.json` here. The MIT-license rule used to
+	// be, which hid the one violation that blocks n8n verification — and hid it only
+	// locally, since n8n's scanner builds its own ESLint config and never loads this file.
+	// Leave it on so `npm run lint` reports the same thing the verification gate does.
 	{
 		files: ['**/*.ts'],
 		rules: {
@@ -101,15 +99,19 @@ export default [
 	// Placed after the general `**/*.ts` block so these stay switched off — in flat
 	// config the later matching entry wins.
 	{
-		files: ['nodes/*/descriptions/**/*.ts'],
+		files: ['nodes/*/actions/**/*.operation.ts'],
 		rules: {
-			// These are declarative parameter definitions, not logic: they are long
-			// because the Graph surface is large, and splitting them by line count
-			// would fragment a single node's parameters across arbitrary files.
+			// An operation file is mostly its parameter definitions, which are long because
+			// the Graph surface is large. Splitting one by line count would separate an
+			// operation's parameters from the `execute` that reads them.
 			'max-lines': 'off',
-			// The postReceive handlers issue follow-up Graph writes per item. Those must
-			// stay sequential: Graph throttles aggressively, and the create handlers roll
-			// back the just-created object before moving on to the next item.
+		},
+	},
+	{
+		files: ['nodes/*/actions/router.ts'],
+		rules: {
+			// Awaiting inside the loop is the point: operations run one item at a time, so
+			// that a directory write finishes before the next one starts.
 			'no-await-in-loop': 'off',
 		},
 	},

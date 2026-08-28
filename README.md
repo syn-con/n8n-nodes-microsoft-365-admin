@@ -8,7 +8,7 @@ sign-in, no redirect URI, and no refresh token to expire.
 
 ## Operations
 
-**User** — Create · Get · Get Many · Update · Delete · Add to Group · Remove from Group ·
+**User** — Create · Get · Get Many · Update · Delete · Add to Group · Remove From Group ·
 Get Groups · Get Manager · Set Manager · Revoke Sessions
 
 **Group** — Create · Get · Get Many · Update · Delete · Get Members · Get Owners ·
@@ -22,23 +22,18 @@ Assign · Assign to Group · Unassign
 
 ## Install
 
-The package is published to GitHub Packages, so npm needs to be pointed at that registry
-for the `@syn-con` scope. In `~/.npmrc`:
+In n8n, go to **Settings** → **Community nodes** → **Install** and enter
+`@synergyconsulting/n8n-nodes-microsoft-365-admin`.
 
-```
-@syn-con:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=YOUR_GITHUB_TOKEN
+To install it manually instead, run this in your n8n user folder and restart n8n:
+
+```bash
+cd ~/.n8n/nodes
+npm install @synergyconsulting/n8n-nodes-microsoft-365-admin
 ```
 
 n8n 1.81 or newer is required: the license write operations run as custom operations, which
 older versions do not execute.
-
-Then install it into your n8n instance and restart:
-
-```bash
-cd ~/.n8n/nodes
-npm install @syn-con/n8n-nodes-microsoft-365-admin
-```
 
 ## Setup
 
@@ -183,6 +178,37 @@ npm test
 ```
 
 `npm run test:coverage` enforces an 80% floor on lines, statements, branches and functions.
+
+### Layout
+
+The node follows n8n's actions/transport structure, so each operation is one file that owns
+its parameters and its own request:
+
+```
+nodes/Microsoft365Admin/
+├── Microsoft365Admin.node.ts     # node description; delegates execution to the router
+├── actions/
+│   ├── router.ts                 # picks the operation for each input item
+│   ├── node.type.ts              # the resource → operation map, as types
+│   └── <resource>/
+│       ├── index.ts              # the Operation dropdown, plus every operation's parameters
+│       └── <operation>.operation.ts   # `properties`, `description`, `execute`
+├── methods/                      # loadOptions and listSearch for the pickers
+├── transport/                    # Graph requests, paging and error translation
+└── helpers/                      # shared parameter shapes and per-resource logic
+```
+
+To add an operation: write `<operation>.operation.ts` exporting `properties`, `description`
+and `execute`, register it in the resource's `index.ts` (both the export and the dropdown),
+and add it to `actions/node.type.ts`.
+
+Two things depart from the plain per-item pattern, both for reasons Graph forces:
+
+- The three **License** write operations export `executeAll` instead of `execute`. Entra ID
+  applies one license change per tenant at a time, so they run once for the whole input,
+  serialise their requests and fold every item aimed at the same target into one call.
+- **Reset Password** returns the password it generated, which is why it is programmatic
+  rather than a declarative PATCH — Graph answers 204 with nothing in it.
 
 ## License
 

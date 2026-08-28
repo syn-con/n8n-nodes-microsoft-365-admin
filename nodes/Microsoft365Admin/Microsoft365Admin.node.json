@@ -1,17 +1,17 @@
 {
-	"node": "@syn-con/n8n-nodes-microsoft-365-admin.microsoft365Admin",
+	"node": "@synergyconsulting/n8n-nodes-microsoft-365-admin.microsoft365Admin",
 	"nodeVersion": "1.0",
 	"codexVersion": "1.0",
-	"categories": ["Development", "Developer Tools"],
+	"categories": ["Development"],
 	"resources": {
 		"credentialDocumentation": [
 			{
-				"url": "https://docs.n8n.io/integrations/builtin/credentials/microsoft/"
+				"url": "https://github.com/syn-con/n8n-nodes-microsoft-365-admin#setup"
 			}
 		],
 		"primaryDocumentation": [
 			{
-				"url": "https://docs.n8n.io/integrations/builtin/app-nodes/n8n-nodes-base.microsoftentra/"
+				"url": "https://github.com/syn-con/n8n-nodes-microsoft-365-admin#readme"
 			}
 		]
 	}

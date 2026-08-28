@@ -6,6 +6,8 @@ import {
 	type KeyObject,
 } from 'node:crypto';
 
+import { OperationalError } from 'n8n-workflow';
+
 import { formatPemBlock } from './format-pem-block';
 
 // private_key_jwt (RFC 7521/7523): the client proves its identity with a JWT
@@ -19,20 +21,31 @@ function base64url(input: Buffer | string): string {
 	return Buffer.from(input).toString('base64url');
 }
 
-function certificateThumbprint(certificate: string): string {
-	let parsed: X509Certificate;
+/**
+ * Runs `parse` and reports the outcome instead of letting it throw.
+ *
+ * Callers raise their own error on the failure branch rather than from inside a
+ * `catch`: this code runs during credential validation, outside any node execution,
+ * so there is no node handle to build a `NodeApiError`/`NodeOperationError` from, and
+ * throwing anything else from a catch block is not allowed.
+ */
+function tryParse<T>(parse: () => T): { ok: true; value: T } | { ok: false; error: unknown } {
 	try {
-		parsed = new X509Certificate(formatPemBlock(certificate));
+		return { ok: true, value: parse() };
 	} catch (error) {
-		// Runs during credential validation, outside any node execution, so there is no
-		// node handle available to build a NodeApiError/NodeOperationError from.
-		// eslint-disable-next-line @n8n/community-nodes/require-node-api-error
-		throw new Error(
+		return { ok: false, error };
+	}
+}
+
+function certificateThumbprint(certificate: string): string {
+	const parsed = tryParse(() => new X509Certificate(formatPemBlock(certificate)));
+	if (!parsed.ok) {
+		throw new OperationalError(
 			'The Certificate field must contain a PEM certificate (-----BEGIN CERTIFICATE-----).',
-			{ cause: error },
+			{ cause: parsed.error },
 		);
 	}
-	return Buffer.from(parsed.fingerprint.replace(/:/g, ''), 'hex').toString('base64url');
+	return Buffer.from(parsed.value.fingerprint.replace(/:/g, ''), 'hex').toString('base64url');
 }
 
 export interface BuildClientAssertionOptions {
@@ -57,22 +70,19 @@ export function buildClientAssertion(options: BuildClientAssertionOptions): stri
 		exp: now + ASSERTION_TTL_SECONDS,
 	};
 
-	let privateKey: KeyObject;
-	try {
-		privateKey = createPrivateKey(formatPemBlock(options.privateKey));
-	} catch (error) {
-		// See above: no node context is available in the credential layer.
-		// eslint-disable-next-line @n8n/community-nodes/require-node-api-error
-		throw new Error(
+	const parsedKey = tryParse(() => createPrivateKey(formatPemBlock(options.privateKey)));
+	if (!parsedKey.ok) {
+		throw new OperationalError(
 			'The Private Key field must contain a PEM private key (-----BEGIN PRIVATE KEY-----).',
-			{ cause: error },
+			{ cause: parsedKey.error },
 		);
 	}
+	const privateKey: KeyObject = parsedKey.value;
 
 	// `createSign('RSA-SHA256')` also signs EC/Ed25519 keys, producing a signature
 	// that contradicts the pinned `alg: RS256` header. Reject non-RSA keys up front.
 	if (privateKey.asymmetricKeyType !== 'rsa') {
-		throw new Error('Certificate authentication requires an RSA private key');
+		throw new OperationalError('Certificate authentication requires an RSA private key');
 	}
 
 	const signingInput = `${base64url(JSON.stringify(header))}.${base64url(JSON.stringify(payload))}`;

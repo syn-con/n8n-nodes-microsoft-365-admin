@@ -2,14 +2,18 @@ const PEM_BODY_LINE_LENGTH = 64;
 
 function formatCompactPem(pem: string, isPublic: boolean): string | undefined {
 	const trimmed = pem.trim();
-	if ((trimmed.match(/-----BEGIN /g) ?? []).length !== 1) {return undefined;}
+	if ((trimmed.match(/-----BEGIN /g) ?? []).length !== 1) {
+		return undefined;
+	}
 
 	const labelPattern = isPublic ? '[A-Z0-9 ]*PUBLIC KEY' : '[A-Z0-9 ]*PRIVATE KEY|CERTIFICATE';
 	const pemMatch = trimmed.match(
 		new RegExp(`^-----BEGIN (${labelPattern})-----([\\s\\S]*?)-----END \\1-----$`),
 	);
 
-	if (!pemMatch) {return undefined;}
+	if (!pemMatch) {
+		return undefined;
+	}
 
 	const [, label, body] = pemMatch;
 	const normalizedBody = body.replace(/\\n/g, '\n').trim();
