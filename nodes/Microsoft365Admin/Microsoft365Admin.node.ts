@@ -80,6 +80,6 @@ export class Microsoft365Admin implements INodeType {
 	methods = { loadOptions, listSearch };
 
 	async execute(this: IExecuteFunctions) {
-		return await router.call(this);
+		return router.call(this);
 	}
 }

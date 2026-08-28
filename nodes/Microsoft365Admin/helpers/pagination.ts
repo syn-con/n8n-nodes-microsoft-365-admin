@@ -19,7 +19,7 @@ export async function fetchCollection(
 	const returnAll = this.getNodeParameter('returnAll', index, false) as boolean;
 
 	if (returnAll) {
-		return await microsoftApiPaginateRequest.call(
+		return microsoftApiPaginateRequest.call(
 			this,
 			'GET',
 			endpoint,
