@@ -1,8 +1,8 @@
 {
 	"name": "@synergyconsulting/n8n-nodes-microsoft-365-admin",
-	"version": "1.0.0",
+	"version": "1.0.1",
 	"description": "Microsoft 365 Admin node for n8n: users, groups, authentication methods and licenses via Microsoft Graph, using app-only authentication.",
-	"license": "SEE LICENSE IN LICENSE.md",
+	"license": "MIT",
 	"homepage": "https://github.com/syn-con/n8n-nodes-microsoft-365-admin#readme",
 	"keywords": [
 		"n8n-community-node-package"

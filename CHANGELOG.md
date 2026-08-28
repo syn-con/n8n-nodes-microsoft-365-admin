@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.1
+
+- Relicensed under the **MIT License**, at n8n's request, as a requirement of the community
+  node verification process. Releases up to 1.0.0 were under n8n's Sustainable Use License.
+  Code derived from n8n's Microsoft Entra ID node remains copyright n8n GmbH; the notice of
+  modification and both copyright lines are retained in `LICENSE.md`.
+- No functional change. npm package metadata is immutable, so this release exists to carry
+  the new licence to the registry — 1.0.0 will always report the old one.
+
 ## 1.0.0
 
 Restructured to n8n's standard actions/transport architecture, and renamed the npm scope.

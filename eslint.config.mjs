@@ -17,25 +17,11 @@ export default [
 			'.coverage/**',
 		],
 	},
-	{
-		files: ['package.json'],
-		rules: {
-			// Reported, but not fatal. This package is derived from n8n's Sustainable Use
-			// Licensed Entra ID node, so it cannot claim MIT, and n8n will not verify it as
-			// a community node while that is true — see docs/upstreaming-plan.md.
-			//
-			// It stays a warning rather than being switched off, so the one thing blocking
-			// verification is visible in every lint run instead of being silently hidden
-			// (which is what the previous `'off'` did). It must not be an error: `npm run
-			// lint` gates both CI and `npm run release`, and an unfixable error would mean
-			// the package could never be built or published.
-			//
-			// Turning this off entirely, or resolving it, is a licensing decision — not a
-			// lint one. n8n's own scanner builds its own config and never reads this file,
-			// so relaxing it here changes nothing about the verification gate.
-			'n8n-nodes-base/community-package-json-license-not-default': 'warn',
-		},
-	},
+	// NOTE: the MIT-license rule is deliberately left at its default. It used to be
+	// relaxed here because the package was on n8n's Sustainable Use License and could not
+	// satisfy it; the package is MIT from 1.0.1, so the rule passes on its own and nothing
+	// needs suppressing. n8n's scanner builds its own config and never reads this file, so
+	// a local override would not have affected the verification gate anyway.
 	{
 		files: ['**/*.ts'],
 		rules: {

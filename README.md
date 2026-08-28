@@ -212,7 +212,7 @@ Two things depart from the plain per-item pattern, both for reasons Graph forces
 
 ## License
 
-Derived from the Microsoft Entra ID node in [n8n](https://github.com/n8n-io/n8n) and
-distributed under n8n's Sustainable Use License — **not** MIT. Internal business use is
-permitted; redistribution is not, other than free of charge for non-commercial purposes.
-See [LICENSE.md](LICENSE.md).
+MIT. Includes code derived from the Microsoft Entra ID node in
+[n8n](https://github.com/n8n-io/n8n); copyright in the original work belongs to n8n GmbH.
+Releases up to 1.0.0 were distributed under n8n's Sustainable Use License. See
+[LICENSE.md](LICENSE.md).
