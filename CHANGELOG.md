@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.0.2
+
+Fixes for app-only token refresh.
+
+- **Return All never refreshed an expired token.** Paging went through n8n's
+  `requestWithAuthenticationPaginated`, which forces `simple: false` on every page. On that
+  path an error status resolves instead of throwing, so core never saw the 401, never
+  re-ran `preAuthentication`, and the error body — which carries no `value` array — was
+  dropped by the page loop. Any Return All listing (users, groups, members, owners, licence
+  holders) issued with an expired token returned an empty array and reported success; the
+  same silence swallowed 403, 429 and 5xx pages. Paging now walks `@odata.nextLink` through
+  the normal transport, so every page gets the 401 refresh and the usual error translation.
+- A 401 that survives the refresh no longer surfaces as a bare `401 - {...}` Graph
+  envelope. It is reported as a rejected access token, naming the things that actually
+  cause it: an expired secret or certificate, missing admin consent, or the wrong tenant.
+- Certificate authentication backdates the client assertion's `nbf` by two minutes. It was
+  stamped at the current second, so a host whose clock ran even slightly ahead of Microsoft
+  drew an intermittent AADSTS700024 rejection. Total assertion lifetime stays inside
+  Entra's ten-minute ceiling.
+
 ## 1.0.1
 
 - Relicensed under the **MIT License**, at n8n's request, as a requirement of the community

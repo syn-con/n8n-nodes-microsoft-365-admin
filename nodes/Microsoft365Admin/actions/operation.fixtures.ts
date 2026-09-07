@@ -18,8 +18,6 @@ export interface OperationScenario {
 	parameters?: Record<string, unknown>;
 	/** Consumed in order; the last entry answers every further request. */
 	responses?: Array<{ statusCode?: number; body?: unknown; headers?: IDataObject }>;
-	/** Pages `requestWithAuthenticationPaginated` hands back. */
-	pages?: Array<{ body: { value?: IDataObject[] } }>;
 	continueOnFail?: boolean;
 	credentials?: IDataObject;
 }
@@ -51,8 +49,6 @@ export function operationContext(scenario: OperationScenario = {}) {
 		},
 	);
 
-	const requestWithAuthenticationPaginated = vi.fn(async () => scenario.pages ?? []);
-
 	const resolve = (name: string, itemIndex = 0, fallback?: unknown) => {
 		const value = scenario.parameters?.[name];
 		if (typeof value === 'function') {
@@ -72,7 +68,6 @@ export function operationContext(scenario: OperationScenario = {}) {
 		continueOnFail: () => scenario.continueOnFail ?? false,
 		helpers: {
 			httpRequestWithAuthentication,
-			requestWithAuthenticationPaginated,
 			returnJsonArray: (data: IDataObject | IDataObject[]): INodeExecutionData[] =>
 				(Array.isArray(data) ? data : [data]).map((json) => ({ json })),
 			constructExecutionMetaData: (

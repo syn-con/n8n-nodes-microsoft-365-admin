@@ -56,13 +56,23 @@ describe('user getAll', () => {
 	it('walks every page when Return All is on', async () => {
 		const { ctx, requests } = operationContext({
 			parameters: { output: 'simple', returnAll: true },
-			pages: [{ body: { value: [{ id: 'u1' }] } }, { body: { value: [{ id: 'u2' }] } }],
+			responses: [
+				{
+					body: {
+						value: [{ id: 'u1' }],
+						'@odata.nextLink': 'https://graph.microsoft.com/v1.0/users?$skiptoken=a',
+					},
+				},
+				{ body: { value: [{ id: 'u2' }] } },
+			],
 		});
 
 		const output = await getAll.call(ctx, 0);
 
-		// Paging goes through the paginated helper, not the single-request transport.
-		expect(requests).toHaveLength(0);
+		// Every page is an authenticated request of its own, so an expired token refreshes
+		// mid-walk instead of the failing page being dropped as an empty result.
+		expect(requests).toHaveLength(2);
+		expect(requests[1].url).toBe('https://graph.microsoft.com/v1.0/users?$skiptoken=a');
 		expect(output.map((item) => item.json.id)).toEqual(['u1', 'u2']);
 	});
 

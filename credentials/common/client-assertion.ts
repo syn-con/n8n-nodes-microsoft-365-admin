@@ -17,6 +17,13 @@ export const CLIENT_ASSERTION_TYPE = 'urn:ietf:params:oauth:client-assertion-typ
 
 const ASSERTION_TTL_SECONDS = 300;
 
+// Entra validates `nbf` against its own clock and rejects an assertion dated in the future
+// (AADSTS700024). An n8n host is not clock-synced with Microsoft, so a host running a few
+// seconds fast would otherwise fail authentication intermittently for no visible reason.
+// Backdating absorbs ordinary drift; `nbf + skew + ttl` stays inside Entra's 10-minute
+// ceiling on assertion lifetime.
+const ASSERTION_CLOCK_SKEW_SECONDS = 120;
+
 function base64url(input: Buffer | string): string {
 	return Buffer.from(input).toString('base64url');
 }
@@ -65,8 +72,8 @@ export function buildClientAssertion(options: BuildClientAssertionOptions): stri
 		iss: options.clientId,
 		sub: options.clientId,
 		jti: randomUUID(),
-		iat: now,
-		nbf: now,
+		iat: now - ASSERTION_CLOCK_SKEW_SECONDS,
+		nbf: now - ASSERTION_CLOCK_SKEW_SECONDS,
 		exp: now + ASSERTION_TTL_SECONDS,
 	};
 

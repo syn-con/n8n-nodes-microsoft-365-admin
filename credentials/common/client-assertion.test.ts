@@ -48,11 +48,15 @@ describe('buildClientAssertion', () => {
 		expect(payload.aud).toBe(base.accessTokenUri);
 	});
 
-	it('expires five minutes after issuance and is valid immediately', () => {
+	it('is backdated against clock skew and expires within the ten-minute ceiling', () => {
+		const now = Math.floor(Date.now() / 1000);
 		const payload = decodeSegment(buildClientAssertion(base).split('.')[1]);
 
-		expect(payload.exp as number).toBe((payload.iat as number) + 300);
+		// A host running slightly fast must not mint an assertion Entra reads as future-dated.
 		expect(payload.nbf).toBe(payload.iat);
+		expect(payload.nbf as number).toBeLessThanOrEqual(now - 120);
+		expect(payload.exp as number).toBe((payload.nbf as number) + 420);
+		expect((payload.exp as number) - (payload.nbf as number)).toBeLessThanOrEqual(600);
 	});
 
 	it('uses a fresh jti per assertion so tokens cannot be replayed', () => {

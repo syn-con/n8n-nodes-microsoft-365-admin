@@ -15,19 +15,23 @@ interface Stub {
 	response?: { statusCode?: number; body?: unknown; headers?: IDataObject };
 	credentials?: IDataObject;
 	parameters?: Record<string, unknown>;
-	pages?: Array<{ body: { value?: IDataObject[] } }>;
+	/** Consumed one per request, for the multi-request pagination walk. */
+	responses?: Array<{ statusCode?: number; body?: unknown; headers?: IDataObject }>;
+	/** Thrown by the auth helper instead of answering, to exercise the failure path. */
+	throws?: unknown;
 }
 
 function mockContext(stub: Stub = {}) {
+	let call = 0;
 	const httpRequestWithAuthentication = vi.fn(
-		async (_credentialType: string, _options: IHttpRequestOptions) => ({
-			statusCode: 200,
-			headers: {},
-			body: {},
-			...stub.response,
-		}),
+		async (_credentialType: string, _options: IHttpRequestOptions) => {
+			if (stub.throws !== undefined) {
+				throw stub.throws;
+			}
+			const response = stub.responses ? stub.responses[call++] : stub.response;
+			return { statusCode: 200, headers: {}, body: {}, ...response };
+		},
 	);
-	const requestWithAuthenticationPaginated = vi.fn(async () => stub.pages ?? []);
 
 	return {
 		getCredentials: vi.fn(
@@ -38,7 +42,7 @@ function mockContext(stub: Stub = {}) {
 			(name: string, _index?: number, fallback?: unknown) =>
 				stub.parameters?.[name] ?? fallback ?? '',
 		),
-		helpers: { httpRequestWithAuthentication, requestWithAuthenticationPaginated },
+		helpers: { httpRequestWithAuthentication },
 	} as unknown as IExecuteFunctions;
 }
 
@@ -166,9 +170,16 @@ describe('microsoftApiRequest', () => {
 });
 
 describe('microsoftApiPaginateRequest', () => {
+	const page = (value: IDataObject[], nextLink?: string) => ({
+		body: { value, ...(nextLink === undefined ? {} : { '@odata.nextLink': nextLink }) },
+	});
+
 	it('concatenates the value arrays of every page', async () => {
 		const context = mockContext({
-			pages: [{ body: { value: [{ id: '1' }, { id: '2' }] } }, { body: { value: [{ id: '3' }] } }],
+			responses: [
+				page([{ id: '1' }, { id: '2' }], 'https://graph.microsoft.com/v1.0/users?$skiptoken=a'),
+				page([{ id: '3' }]),
+			],
 		});
 
 		expect(await microsoftApiPaginateRequest.call(context, 'GET', '/users')).toEqual([
@@ -179,28 +190,87 @@ describe('microsoftApiPaginateRequest', () => {
 	});
 
 	it('skips pages that carry no value array', async () => {
-		const context = mockContext({ pages: [{ body: {} }, { body: { value: [{ id: '1' }] } }] });
+		const context = mockContext({
+			responses: [
+				{ body: { '@odata.nextLink': 'https://graph.microsoft.com/v1.0/users?$skiptoken=a' } },
+				page([{ id: '1' }]),
+			],
+		});
+
 		expect(await microsoftApiPaginateRequest.call(context, 'GET', '/users')).toEqual([{ id: '1' }]);
 	});
 
-	it('follows @odata.nextLink through the pagination options', async () => {
-		const context = mockContext({ pages: [] });
-		await microsoftApiPaginateRequest.call(context, 'GET', '/users');
+	it('requests each page through the authenticated helper, so an expired token refreshes', async () => {
+		const nextLink = 'https://graph.microsoft.com/v1.0/users?$skiptoken=a';
+		const context = mockContext({ responses: [page([{ id: '1' }], nextLink), page([{ id: '2' }])] });
 
-		const [, , paginationOptions, credentialType] = vi.mocked(
-			context.helpers.requestWithAuthenticationPaginated,
-		).mock.calls[0] as unknown[];
+		await microsoftApiPaginateRequest.call(context, 'GET', '/users', {}, { qs: { $top: 999 } });
 
-		expect(credentialType).toBe(CREDENTIAL);
-		expect(JSON.stringify(paginationOptions)).toContain('@odata.nextLink');
+		const { calls } = vi.mocked(context.helpers.httpRequestWithAuthentication).mock;
+		expect(calls).toHaveLength(2);
+		expect(calls[0][0]).toBe(CREDENTIAL);
+		expect(calls[0][1].url).toBe('https://graph.microsoft.com/v1.0/users');
+		expect(calls[0][1].qs).toEqual({ $top: 999 });
+		// The nextLink already carries the query string; re-applying `qs` would duplicate it.
+		expect(calls[1][1].url).toBe(nextLink);
+		expect(calls[1][1].qs).toBeUndefined();
+	});
+
+	it('surfaces a failing page instead of dropping it as an empty result', async () => {
+		const context = mockContext({
+			responses: [
+				{ statusCode: 403, body: { error: { code: 'Authorization_RequestDenied', message: 'no' } } },
+			],
+		});
+
+		await expect(microsoftApiPaginateRequest.call(context, 'GET', '/users')).rejects.toBeInstanceOf(
+			NodeApiError,
+		);
+	});
+
+	it('stops when a nextLink repeats rather than looping forever', async () => {
+		const nextLink = 'https://graph.microsoft.com/v1.0/users?$skiptoken=a';
+		const context = mockContext({
+			responses: [page([{ id: '1' }], nextLink), page([{ id: '2' }], nextLink)],
+		});
+
+		expect(await microsoftApiPaginateRequest.call(context, 'GET', '/users')).toEqual([
+			{ id: '1' },
+			{ id: '2' },
+		]);
+		expect(context.helpers.httpRequestWithAuthentication).toHaveBeenCalledTimes(2);
 	});
 
 	it('passes the item index through so errors point at the right item', async () => {
-		const context = mockContext({ pages: [] });
-		await microsoftApiPaginateRequest.call(context, 'GET', '/users', {}, { itemIndex: 4 });
+		const context = mockContext({
+			responses: [
+				{ statusCode: 404, body: { error: { code: 'Request_ResourceNotFound', message: 'no' } } },
+			],
+		});
 
-		const [, itemIndex] = vi.mocked(context.helpers.requestWithAuthenticationPaginated).mock
-			.calls[0] as unknown[];
-		expect(itemIndex).toBe(4);
+		await expect(
+			microsoftApiPaginateRequest.call(context, 'GET', '/users', {}, { itemIndex: 4 }),
+		).rejects.toMatchObject({ context: { itemIndex: 4 } });
+	});
+});
+
+describe('a 401 that survives the token refresh', () => {
+	it('is reported as a rejected access token rather than a raw Graph envelope', async () => {
+		const context = mockContext({
+			throws: Object.assign(new Error('401 - {"error":{"code":"InvalidAuthenticationToken"}}'), {
+				httpCode: '401',
+			}),
+		});
+
+		await expect(microsoftApiRequest.call(context, 'GET', '/users')).rejects.toMatchObject({
+			message: 'Microsoft Graph rejected the access token',
+		});
+	});
+
+	it('leaves any other transport failure untouched', async () => {
+		const failure = Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
+		const context = mockContext({ throws: failure });
+
+		await expect(microsoftApiRequest.call(context, 'GET', '/users')).rejects.toBe(failure);
 	});
 });
