@@ -21,6 +21,9 @@ const CREDENTIAL_TYPE = 'microsoft365AdminServicePrincipalApi';
  * 401 responses must reach `httpRequestWithAuthentication` so an expired token can
  * refresh; everything else in the 4xx/5xx range is inspected here instead of thrown
  * by the HTTP helper, so Graph's error envelope can be translated first.
+ *
+ * n8n only honours `except` from 2.9. Older versions read any truthy value as "ignore
+ * every status", 401 included, so `microsoftApiRequest` covers for them itself.
  */
 export const IGNORE_STATUS_ERRORS = {
 	ignore: true as const,
@@ -28,6 +31,19 @@ export const IGNORE_STATUS_ERRORS = {
 };
 
 type RequestContext = IExecuteFunctions | IExecuteSingleFunctions | ILoadOptionsFunctions;
+
+type FullResponse = { statusCode: number; body: unknown; headers: IDataObject };
+
+/**
+ * Whether the request asked for a 401 to be thrown, so that core could refresh the token.
+ */
+function leavesUnauthorizedToCore(
+	ignoreHttpStatusErrors: IHttpRequestOptions['ignoreHttpStatusErrors'],
+): boolean {
+	return (
+		typeof ignoreHttpStatusErrors === 'object' && ignoreHttpStatusErrors.except.includes(401)
+	);
+}
 
 /**
  * Resolves the Graph host from the credential, tolerating a stored trailing slash.
@@ -106,27 +122,36 @@ export async function microsoftApiRequest(
 ): Promise<unknown> {
 	const baseUrl = await getGraphApiBaseUrl.call(this);
 	const callerHandlesErrors = extras.ignoreHttpStatusErrors !== undefined;
+	const ignoreHttpStatusErrors = extras.ignoreHttpStatusErrors ?? IGNORE_STATUS_ERRORS;
 
-	const options: IHttpRequestOptions = {
-		method,
-		url: extras.url ?? `${baseUrl}/v1.0${endpoint}`,
-		// The `$metadata` endpoints answer with XML, which the property loaders parse
-		// themselves. Leaving JSON parsing on for those would hand them an unusable value.
-		json: !endpoint.startsWith('/$metadata'),
-		headers: extras.headers,
-		body,
-		qs: extras.qs,
-		returnFullResponse: true,
-		ignoreHttpStatusErrors: extras.ignoreHttpStatusErrors ?? IGNORE_STATUS_ERRORS,
-	};
+	// Built fresh per send: core writes the bearer header and strips an empty body on the
+	// options it is handed, and a resend must not inherit either.
+	const send = async (ignore: IHttpRequestOptions['ignoreHttpStatusErrors']) =>
+		(await this.helpers.httpRequestWithAuthentication.call(this, CREDENTIAL_TYPE, {
+			method,
+			url: extras.url ?? `${baseUrl}/v1.0${endpoint}`,
+			// The `$metadata` endpoints answer with XML, which the property loaders parse
+			// themselves. Leaving JSON parsing on for those would hand them an unusable value.
+			json: !endpoint.startsWith('/$metadata'),
+			headers: extras.headers,
+			body,
+			qs: extras.qs,
+			returnFullResponse: true,
+			ignoreHttpStatusErrors: ignore,
+		})) as FullResponse;
 
-	let response: { statusCode: number; body: unknown; headers: IDataObject };
+	let response: FullResponse;
 	try {
-		response = (await this.helpers.httpRequestWithAuthentication.call(
-			this,
-			CREDENTIAL_TYPE,
-			options,
-		)) as { statusCode: number; body: unknown; headers: IDataObject };
+		response = await send(ignoreHttpStatusErrors);
+
+		// A 401 can only come back as a response when core ignored `except` (n8n before 2.9),
+		// in which case it never refreshed the token either: the stored one stays expired until
+		// someone re-tests the credential. Sending again with status errors left on makes core
+		// throw the 401 itself, which is what runs its refresh-and-resend. Graph rejects a 401
+		// before acting on the request, so sending it again is safe for writes too.
+		if (response.statusCode === 401 && leavesUnauthorizedToCore(ignoreHttpStatusErrors)) {
+			response = await send(false);
+		}
 	} catch (error) {
 		// 401 is the one status deliberately left un-ignored, so core mints a fresh token and
 		// replays the request. By the time a 401 surfaces here that replay has already run and

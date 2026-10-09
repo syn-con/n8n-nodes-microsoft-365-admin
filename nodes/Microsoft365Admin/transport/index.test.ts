@@ -15,8 +15,8 @@ interface Stub {
 	response?: { statusCode?: number; body?: unknown; headers?: IDataObject };
 	credentials?: IDataObject;
 	parameters?: Record<string, unknown>;
-	/** Consumed one per request, for the multi-request pagination walk. */
-	responses?: Array<{ statusCode?: number; body?: unknown; headers?: IDataObject }>;
+	/** Consumed one per request, for multi-request flows. An `Error` entry is thrown. */
+	responses?: Array<{ statusCode?: number; body?: unknown; headers?: IDataObject } | Error>;
 	/** Thrown by the auth helper instead of answering, to exercise the failure path. */
 	throws?: unknown;
 }
@@ -29,6 +29,9 @@ function mockContext(stub: Stub = {}) {
 				throw stub.throws;
 			}
 			const response = stub.responses ? stub.responses[call++] : stub.response;
+			if (response instanceof Error) {
+				throw response;
+			}
 			return { statusCode: 200, headers: {}, body: {}, ...response };
 		},
 	);
@@ -251,6 +254,101 @@ describe('microsoftApiPaginateRequest', () => {
 		await expect(
 			microsoftApiPaginateRequest.call(context, 'GET', '/users', {}, { itemIndex: 4 }),
 		).rejects.toMatchObject({ context: { itemIndex: 4 } });
+	});
+});
+
+describe('a 401 handed back as a response (n8n before 2.9 ignores `except`)', () => {
+	const expired = {
+		statusCode: 401,
+		body: { error: { code: 'InvalidAuthenticationToken', message: 'Lifetime validation failed' } },
+	};
+
+	it('sends again with status errors left on, so core throws the 401 and refreshes', async () => {
+		const context = mockContext({ responses: [expired, { body: { id: 'u1' } }] });
+
+		expect(await microsoftApiRequest.call(context, 'GET', '/users/u1')).toEqual({ id: 'u1' });
+
+		const { calls } = vi.mocked(context.helpers.httpRequestWithAuthentication).mock;
+		expect(calls).toHaveLength(2);
+		expect(calls[1][0]).toBe(CREDENTIAL);
+		expect(calls[1][1]).toMatchObject({
+			method: 'GET',
+			url: 'https://graph.microsoft.com/v1.0/users/u1',
+			ignoreHttpStatusErrors: false,
+		});
+	});
+
+	it('sends every resend with options of its own, not the ones core already wrote to', async () => {
+		const context = mockContext({ responses: [expired, { body: {} }] });
+
+		await microsoftApiRequest.call(context, 'GET', '/users/u1');
+
+		const { calls } = vi.mocked(context.helpers.httpRequestWithAuthentication).mock;
+		expect(calls[1][1]).not.toBe(calls[0][1]);
+	});
+
+	it('covers callers that inspect failures themselves, such as the licence writes', async () => {
+		const context = mockContext({ responses: [expired, { statusCode: 202, body: '' }] });
+
+		const result = (await microsoftApiRequest.call(
+			context,
+			'POST',
+			'/users/u1/assignLicense',
+			{ addLicenses: [], removeLicenses: [] },
+			{ returnFullResponse: true, ignoreHttpStatusErrors: { ignore: true, except: [401] } },
+		)) as { statusCode: number };
+
+		expect(result.statusCode).toBe(202);
+		expect(context.helpers.httpRequestWithAuthentication).toHaveBeenCalledTimes(2);
+	});
+
+	it('refreshes mid-walk, so a long Return All outliving its token still completes', async () => {
+		const nextLink = 'https://graph.microsoft.com/v1.0/users?$skiptoken=a';
+		const context = mockContext({
+			responses: [
+				{ body: { value: [{ id: '1' }], '@odata.nextLink': nextLink } },
+				expired,
+				{ body: { value: [{ id: '2' }] } },
+			],
+		});
+
+		expect(await microsoftApiPaginateRequest.call(context, 'GET', '/users')).toEqual([
+			{ id: '1' },
+			{ id: '2' },
+		]);
+
+		const { calls } = vi.mocked(context.helpers.httpRequestWithAuthentication).mock;
+		expect(calls[2][1]).toMatchObject({ url: nextLink, ignoreHttpStatusErrors: false });
+	});
+
+	it('reports a rejected access token when the refreshed token is refused as well', async () => {
+		const context = mockContext({
+			responses: [
+				expired,
+				Object.assign(new Error('401 - {"error":{"code":"InvalidAuthenticationToken"}}'), {
+					httpCode: '401',
+				}),
+			],
+		});
+
+		await expect(microsoftApiRequest.call(context, 'GET', '/users')).rejects.toMatchObject({
+			message: 'Microsoft Graph rejected the access token',
+		});
+	});
+
+	it('leaves the 401 alone for a caller that asked to see every status', async () => {
+		const context = mockContext({ responses: [expired] });
+
+		const result = (await microsoftApiRequest.call(
+			context,
+			'GET',
+			'/users',
+			{},
+			{ returnFullResponse: true, ignoreHttpStatusErrors: true },
+		)) as { statusCode: number };
+
+		expect(result.statusCode).toBe(401);
+		expect(context.helpers.httpRequestWithAuthentication).toHaveBeenCalledTimes(1);
 	});
 });
 

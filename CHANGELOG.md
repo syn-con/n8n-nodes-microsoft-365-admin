@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.3
+
+- **The access token never refreshed on n8n before 2.9.** Requests ask core to ignore every
+  error status except 401 (`{ ignore: true, except: [401] }`), so that a 401 is thrown and
+  core re-mints the token and resends. n8n only honours `except` from 2.9; older versions,
+  including the whole 1.x line, read any truthy value as "ignore every status", so the 401
+  came back as an ordinary response and was reported as an error. The stored token stayed
+  expired until someone re-tested the credential, so workflows failed about an hour after
+  each test. A 401 handed back as a response is now sent again with status errors left on,
+  which makes core throw it and run its usual refresh-and-resend. On n8n 2.9 and later
+  nothing changes, since core never hands a 401 back there.
+
 ## 1.0.2
 
 Fixes for app-only token refresh.
