@@ -1,4 +1,6 @@
-# Publishes this n8n community node package to npm on every version tag push.
+# Publishes this n8n community node package to npm on every push to main that carries
+# a version not yet on npm. Pushes that leave the version unchanged finish without
+# publishing.
 #
 # n8n requires community nodes submitted for verification to be published via
 # GitHub Actions with an npm provenance statement. Provenance lets anyone
@@ -29,16 +31,22 @@
 #
 # ─── RELEASE PROCESS ───────────────────────────────────────────────────────────
 #
-# Run `npm run release` locally. It lints, builds, prompts for a version bump,
-# updates the changelog, commits, tags and pushes — which triggers this workflow.
+# Bump `version` in package.json (and package-lock.json), add a CHANGELOG entry, and
+# push to main. `npm run release` locally does the bump, commit, tag and push for you.
+# Either way, the push to main is what publishes; tags are kept for history only.
 
 name: Publish
 
 on:
   push:
-    tags:
-      # Matches 0.1.0, 1.2.3, 2.0.0-rc.1, etc. — the tag shape `npm run release` creates.
-      - '*.*.*'
+    branches:
+      - main
+  workflow_dispatch:
+
+# Two pushes in quick succession must not race each other to publish the same version.
+concurrency:
+  group: publish
+  cancel-in-progress: false
 
 jobs:
   publish:
@@ -60,13 +68,30 @@ jobs:
           node-version: 'lts/*'
           cache: 'npm'
 
+      - name: Check whether this version is already on npm
+        id: version
+        run: |
+          name=$(node -p "require('./package.json').name")
+          version=$(node -p "require('./package.json').version")
+          published=$(npm view "$name@$version" version 2>/dev/null || true)
+          if [ "$published" = "$version" ]; then
+            echo "$name@$version is already on npm; nothing to publish."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Publishing $name@$version."
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Install dependencies
+        if: steps.version.outputs.publish == 'true'
         run: npm ci
 
       - name: Test
+        if: steps.version.outputs.publish == 'true'
         run: npm test
 
       - name: Release
+        if: steps.version.outputs.publish == 'true'
         # Publishes to npm with a provenance attestation (requires id-token: write above).
         # Lint and build run automatically as part of `n8n-node release` in CI.
         #
