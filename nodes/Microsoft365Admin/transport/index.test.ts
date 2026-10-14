@@ -3,6 +3,7 @@ import {
 	type IDataObject,
 	type IExecuteFunctions,
 	type IHttpRequestOptions,
+	type INode,
 } from 'n8n-workflow';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -365,10 +366,20 @@ describe('a 401 that survives the token refresh', () => {
 		});
 	});
 
-	it('leaves any other transport failure untouched', async () => {
-		const failure = Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
+	it("leaves core's own node error for any other failure untouched", async () => {
+		const node = { name: 'Microsoft 365 Admin', type: 'microsoft365Admin' } as INode;
+		const failure = new NodeApiError(node, { message: 'socket hang up', code: 'ECONNRESET' });
 		const context = mockContext({ throws: failure });
 
 		await expect(microsoftApiRequest.call(context, 'GET', '/users')).rejects.toBe(failure);
+	});
+
+	it('wraps a failure core left unwrapped in a node error', async () => {
+		const failure = Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
+		const context = mockContext({ throws: failure });
+
+		await expect(microsoftApiRequest.call(context, 'GET', '/users')).rejects.toBeInstanceOf(
+			NodeApiError,
+		);
 	});
 });

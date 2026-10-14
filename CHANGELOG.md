@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.4
+
+- A request failure other than a rejected token is re-thrown as before when core has already
+  wrapped it in a `NodeApiError`, which is always the case in practice; anything that
+  arrives unwrapped is now wrapped in one. This replaces a bare `throw error` that n8n's
+  community package scanner flags even with the lint rule disabled on that line.
+
 ## 1.0.3
 
 - **The access token never refreshed on n8n before 2.9.** Requests ask core to ignore every

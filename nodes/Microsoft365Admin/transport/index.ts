@@ -167,9 +167,11 @@ export async function microsoftApiRequest(
 		}
 
 		// Every other failure already arrives as core's own `NodeApiError`, built from the
-		// response it saw. Re-wrapping it here would bury that detail behind a second envelope.
-		// eslint-disable-next-line @n8n/community-nodes/require-node-api-error
-		throw error;
+		// response it saw. Re-wrapping it here would bury that detail behind a second envelope,
+		// so only an error core left unwrapped gets one.
+		throw error instanceof NodeApiError
+			? error
+			: new NodeApiError(this.getNode(), error as JsonObject);
 	}
 
 	if (callerHandlesErrors) {
